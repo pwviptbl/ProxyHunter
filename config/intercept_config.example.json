@@ -1,0 +1,19 @@
+{
+  "port": 9507,
+  "rules": [
+    {
+      "host": "exemplo.com",
+      "path": "/contato",
+      "param_name": "Titulo",
+      "param_value": "teste1",
+      "enabled": true
+    },
+    {
+      "host": "test.com",
+      "path": "/api",
+      "param_name": "id",
+      "param_value": "999",
+      "enabled": true
+    }
+  ]
+}

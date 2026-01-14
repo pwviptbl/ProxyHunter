@@ -1,0 +1,12 @@
+mitmproxy
+requests
+ttkthemes
+click
+playwright
+PySide6
+pyinstaller
+PyJWT
+google-generativeai
+fpdf2
+stem
+requests[socks]
