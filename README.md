@@ -576,4 +576,4 @@ python cli.py run --port 9090
 
 ## Licença
 
-Este projeto é de código aberto.
+Este projeto é licenciado sob a licença Non-Commercial (custom). Veja `LICENSE`.
