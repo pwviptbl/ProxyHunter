@@ -5,6 +5,24 @@
 
 echo "🚀 Iniciando ProxyHunter ..."
 
+# Verifica suporte a venv (ensurepip)
+if ! python3 -c "import ensurepip" >/dev/null 2>&1; then
+    echo "⚠️  O módulo ensurepip não está disponível."
+    if command -v apt-get >/dev/null 2>&1; then
+        PY_VER=$(python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
+        VENV_PKG="python${PY_VER}-venv"
+        echo "📦 Instalando dependência do venv: ${VENV_PKG} (ou python3-venv)..."
+        if command -v sudo >/dev/null 2>&1; then
+            sudo apt-get install -y "${VENV_PKG}" python3-venv || true
+        else
+            apt-get install -y "${VENV_PKG}" python3-venv || true
+        fi
+    else
+        echo "❌ Instale o pacote de venv (ex.: python3-venv) e tente novamente."
+        exit 1
+    fi
+fi
+
 # Modo seguro para contornar crashes de drivers/GL
 if [ "${PROXYHUNTER_SAFE_MODE}" = "1" ]; then
     echo "🛡️  Modo seguro ativo: forçando renderização por software..."
