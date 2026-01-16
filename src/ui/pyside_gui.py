@@ -5,9 +5,11 @@ import threading
 from urllib.parse import urlparse
 
 from PySide6.QtCore import Signal, QAbstractTableModel, Qt, QTimer
+from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
                                QPushButton, QLabel, QLineEdit, QGroupBox, QMessageBox, QTabWidget,
-                               QTableView, QAbstractItemView, QGridLayout, QHeaderView, QDialog)
+                               QTableView, QAbstractItemView, QGridLayout, QHeaderView, QDialog,
+                               QScrollArea)
 
 from mitmproxy import options
 from mitmproxy.tools.dump import DumpMaster
@@ -90,7 +92,13 @@ class ProxyGUI(QMainWindow):
         self.spider.set_ui_queue(self.ui_queue)
 
         self.setWindowTitle("ProxyHunter")
-        self.setGeometry(100, 100, 1200, 800)
+        screen = QGuiApplication.primaryScreen()
+        if screen:
+            available = screen.availableGeometry()
+            self.resize(min(1200, available.width()), min(800, available.height()))
+        else:
+            self.resize(1200, 800)
+        self.move(100, 100)
 
         # Configura o widget central e o layout principal
         self.central_widget = QWidget()
@@ -173,17 +181,28 @@ class ProxyGUI(QMainWindow):
         """Cria o sistema de abas."""
         self.tab_widget = QTabWidget()
         self.main_layout.addWidget(self.tab_widget)
+        self._tab_wrappers = {}
+
+        def wrap_tab(widget: QWidget) -> QWidget:
+            scroll = QScrollArea()
+            scroll.setWidgetResizable(True)
+            scroll.setWidget(widget)
+            self._tab_wrappers[widget] = scroll
+            return scroll
+
+        def add_tab(widget: QWidget, label: str):
+            self.tab_widget.addTab(wrap_tab(widget), label)
 
         # Cria e adiciona a aba de regras
         rules_tab = RulesTab(self.config)
-        self.tab_widget.addTab(rules_tab, "Regras")
+        add_tab(rules_tab, "Regras")
 
         # Cria e adiciona a aba de interceptação
         self.intercept_tab = InterceptTab()
         self.intercept_tab.toggle_intercept_requested.connect(self.toggle_intercept)
         self.intercept_tab.forward_requested.connect(self.forward_request)
         self.intercept_tab.drop_requested.connect(self.drop_request)
-        self.tab_widget.addTab(self.intercept_tab, "Intercept")
+        add_tab(self.intercept_tab, "Intercept")
 
         # Cria e adiciona a aba de histórico
         self.history_tab = HistoryTab(self.history, self.config)
@@ -194,53 +213,58 @@ class ProxyGUI(QMainWindow):
         self.history_tab.clear_history_requested.connect(self._clear_history)
         self.history_tab.add_host_to_scope_requested.connect(self._add_host_to_scope)
         self.history_tab.send_to_jwt_editor_requested.connect(self.send_to_jwt_editor)
-        self.tab_widget.addTab(self.history_tab, "Histórico")
+        add_tab(self.history_tab, "Histórico")
 
         # Cria e adiciona a aba de repetição
         self.repeater_tab = RepeaterTab(self.cookie_manager)
-        self.tab_widget.addTab(self.repeater_tab, "Repetição")
+        add_tab(self.repeater_tab, "Repetição")
 
         # Cria e adiciona a aba de attacker
         self.attacker_tab = AttackerTab(self.cookie_manager, self.history)
-        self.tab_widget.addTab(self.attacker_tab, "Attacker")
+        add_tab(self.attacker_tab, "Attacker")
         
         # Cria e adiciona a aba de decoder
         self.decoder_tab = DecoderTab()
-        self.tab_widget.addTab(self.decoder_tab, "Decoder")
+        add_tab(self.decoder_tab, "Decoder")
         
         # Cria e adiciona a aba do Editor de JWT
         self.jwt_editor_tab = JWTEditorTab()
         self.jwt_editor_tab.send_to_repeater_requested.connect(self.send_to_repeater)
-        self.tab_widget.addTab(self.jwt_editor_tab, "JWT Editor")
+        add_tab(self.jwt_editor_tab, "JWT Editor")
 
         # Cria e adiciona a aba de comparador
         self.comparator_tab = ComparatorTab()
-        self.tab_widget.addTab(self.comparator_tab, "Comparador")
+        add_tab(self.comparator_tab, "Comparador")
         
         # Cria e adiciona a aba do Cookie Jar
         self.cookie_jar_tab = CookieJarTab(self.cookie_manager)
-        self.tab_widget.addTab(self.cookie_jar_tab, "Cookie")
+        add_tab(self.cookie_jar_tab, "Cookie")
         
         # Cria e adiciona a aba do Scanner
         self.scanner_tab = ScannerTab(self.history, self.active_scanner)
-        self.tab_widget.addTab(self.scanner_tab, "Scanner")
+        add_tab(self.scanner_tab, "Scanner")
         
         # Cria e adiciona a aba do Spider/Crawler
         self.spider_tab = SpiderTab(self.spider, self.config)
-        self.tab_widget.addTab(self.spider_tab, "Spider")
+        add_tab(self.spider_tab, "Spider")
         
         # Cria e adiciona a aba de WebSocket
         self.websocket_tab = WebSocketTab(self.websocket_history)
-        self.tab_widget.addTab(self.websocket_tab, "WebSocket")
+        add_tab(self.websocket_tab, "WebSocket")
         
 
 
         # Cria e adiciona a aba de Tecnologias
         self.technologies_tab = TechnologiesTab()
-        self.tab_widget.addTab(self.technologies_tab, "Tecnologias")
+        add_tab(self.technologies_tab, "Tecnologias")
 
         # Conecta os sinais entre as abas após todas terem sido criadas
         self.history_tab.scan_requested.connect(self.scanner_tab.start_scan_from_request)
+
+    def _show_tab(self, widget: QWidget):
+        """Exibe a aba correta mesmo quando está envolvida por QScrollArea."""
+        tab_widget = self._tab_wrappers.get(widget, widget)
+        self.tab_widget.setCurrentWidget(tab_widget)
 
     def start_proxy(self):
         """Inicia o servidor proxy em uma thread separada."""
@@ -398,7 +422,7 @@ class ProxyGUI(QMainWindow):
                 self.scanner_tab.refresh_vulnerabilities()
         elif msg_type == "intercepted_request":
             self.intercept_tab.display_request(data)
-            self.tab_widget.setCurrentWidget(self.intercept_tab)
+            self._show_tab(self.intercept_tab)
         elif msg_type == "update_spider_stats":
             if hasattr(self, 'spider_tab'):
                 self.spider_tab.apply_stats(data)
@@ -441,19 +465,19 @@ class ProxyGUI(QMainWindow):
         """Envia uma requisição do histórico para a aba de repetição."""
         log.info(f"Enviando requisição {entry['id']} para o Repeater.")
         self.repeater_tab.set_request_data(entry)
-        self.tab_widget.setCurrentWidget(self.repeater_tab)
+        self._show_tab(self.repeater_tab)
 
     def send_to_attacker(self, entry: dict):
         """Envia uma requisição do histórico para a aba de attacker."""
         log.info(f"Enviando requisição {entry['id']} para o Attacker.")
         self.attacker_tab.set_request_data(entry)
-        self.tab_widget.setCurrentWidget(self.attacker_tab)
+        self._show_tab(self.attacker_tab)
 
     def send_to_jwt_editor(self, token: str, entry: dict):
         """Envia um JWT e a entrada da requisição para o editor de JWT."""
         log.info(f"Enviando JWT da requisição {entry['id']} para o Editor de JWT.")
         self.jwt_editor_tab.set_request_data(token, entry)
-        self.tab_widget.setCurrentWidget(self.jwt_editor_tab)
+        self._show_tab(self.jwt_editor_tab)
 
     def _add_host_to_scope(self, host: str):
         """Adiciona um host à lista de escopo."""
@@ -493,13 +517,13 @@ class ProxyGUI(QMainWindow):
         """Define a primeira requisição para comparação."""
         log.info(f"Definindo requisição {entry['id']} como Requisição 1 no Comparador.")
         self.comparator_tab.set_comparator_request_1(entry)
-        self.tab_widget.setCurrentWidget(self.comparator_tab)
+        self._show_tab(self.comparator_tab)
 
     def set_comparator_request_2(self, entry: dict):
         """Define a segunda requisição para comparação."""
         log.info(f"Definindo requisição {entry['id']} como Requisição 2 no Comparador.")
         self.comparator_tab.set_comparator_request_2(entry)
-        self.tab_widget.setCurrentWidget(self.comparator_tab)
+        self._show_tab(self.comparator_tab)
 
     # --- Lógica do Menu de Relatório ---
     def _open_ai_config_dialog(self):
