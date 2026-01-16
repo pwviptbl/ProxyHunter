@@ -6,6 +6,8 @@ Intercepta requisições HTTP para um determinado domínio e altera parâmetros 
 
 Aplicação Python com interface gráfica que permite configurar regras de interceptação para modificar parâmetros de requisições HTTP. Quando o navegador envia uma requisição para uma rota configurada, o proxy intercepta, modifica apenas os parâmetros especificados e encaminha a requisição mantendo todos os outros parâmetros originais.
 
+![alt text](imagens/image.png)
+
 ## Funcionalidades
 
 - ✅ Interface gráfica intuitiva (PySide6)
