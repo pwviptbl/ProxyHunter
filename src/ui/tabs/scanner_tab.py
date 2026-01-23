@@ -45,6 +45,7 @@ class ScannerTab(QWidget):
         self.history_manager = history
         self.active_scanner = active_scanner
         self.scan_worker = None
+        self.scan_queue = []
 
         layout = QVBoxLayout(self)
 
@@ -160,9 +161,6 @@ class ScannerTab(QWidget):
         if not entry:
             log.warning("ScannerTab recebeu uma requisição vazia para escanear.")
             return
-        if self.scan_worker and self.scan_worker.isRunning():
-            QMessageBox.warning(self, "Scanner Ativo", "Um scan ativo já está em execução.")
-            return
         request_data_for_scanner = {
             'id': entry.get('id'),
             'method': entry.get('method'),
@@ -170,12 +168,39 @@ class ScannerTab(QWidget):
             'headers': entry.get('request_headers', {}),
             'body': entry.get('request_body', '')
         }
+        if self.scan_worker:
+            try:
+                if self.scan_worker.isRunning():
+                    self.scan_queue.append(request_data_for_scanner)
+                    self._update_queue_status()
+                    log.info(f"Scan ativo enfileirado. Fila atual: {len(self.scan_queue)}")
+                    return
+            except RuntimeError:
+                # Worker já foi destruído pelo Qt; limpa referência
+                self.scan_worker = None
+        self._start_scan(request_data_for_scanner)
+
+    def _start_scan(self, request_data_for_scanner: dict):
         self.set_active_scan_status(f"Escaneando {request_data_for_scanner['url']}...", "blue")
         self.scan_worker = ScanWorker(self.active_scanner, request_data_for_scanner)
         self.scan_worker.scan_complete.connect(self._on_scan_complete)
         self.scan_worker.finished.connect(lambda: self.set_active_scan_status("Scan finalizado.", "green"))
-        self.scan_worker.finished.connect(self.scan_worker.deleteLater)
+        self.scan_worker.finished.connect(self._on_scan_worker_finished)
         self.scan_worker.start()
+
+    def _update_queue_status(self):
+        if self.scan_queue:
+            self.set_active_scan_status(f"Fila de scans: {len(self.scan_queue)}", "orange")
+
+    def _on_scan_worker_finished(self):
+        if self.scan_worker:
+            self.scan_worker.deleteLater()
+            self.scan_worker = None
+        if self.scan_queue:
+            next_request = self.scan_queue.pop(0)
+            self._start_scan(next_request)
+        else:
+            self._update_queue_status()
 
     def _on_scan_complete(self, request_data: dict, vulnerabilities: list):
         if not vulnerabilities:

@@ -6,10 +6,7 @@ import requests
 from src.core.request_rebuilder import rebuild_attack_request
 from src.core.vulnerability import Vulnerability
 from src.scanners.IScanModule import IScanModule, RequestNode, InjectionPoint
-
-# A placeholder for a real OAST client, to allow type hinting.
-# In a real scenario, this would be `from src.core.oast_client import OASTClient`
-OASTClient = Any
+from src.core.oast_client import OASTClient
 
 
 class RceOastModule(IScanModule):

@@ -74,8 +74,25 @@ class InterceptConfig:
         self.oast_api_url = "http://144.126.216.70/api.php"
         self.oast_api_key = "abc123def456ghi789jkl012mno345pqr678stu901vwx234yz"
         self.oast_base_domain = "callback.localhost"
+
+        # Modulos do scanner ativo
+        self.active_scan_modules = self._get_default_active_scan_modules()
         
         self.load_config()
+
+    @staticmethod
+    def _get_default_active_scan_modules():
+        return {
+            'SqlInjectionModule': True,
+            'RceOastModule': True,
+            'SstiModule': True,
+            'SsrfOastModule': True,
+            'OpenRedirectModule': True,
+            'HeaderInjectionModule': True,
+            'LfiModule': True,
+            'XssModule': True,
+            'IdorModule': True,
+        }
 
     def set_ui_queue(self, ui_queue: queue.Queue):
         """Define a fila para notificações da UI."""
@@ -103,6 +120,18 @@ class InterceptConfig:
                     self.oast_api_url = oast_config.get('api_url', self.oast_api_url)
                     self.oast_api_key = oast_config.get('api_key', self.oast_api_key)
                     self.oast_base_domain = oast_config.get('base_domain', self.oast_base_domain)
+
+                    # Carrega modulos do scanner ativo
+                    modules_config = data.get('active_scan_modules')
+                    default_modules = self._get_default_active_scan_modules()
+                    if isinstance(modules_config, dict):
+                        merged = dict(default_modules)
+                        merged.update({k: bool(v) for k, v in modules_config.items()})
+                        self.active_scan_modules = merged
+                    elif isinstance(modules_config, list):
+                        self.active_scan_modules = {name: (name in modules_config) for name in default_modules.keys()}
+                    else:
+                        self.active_scan_modules = dict(default_modules)
             except Exception as e:
                 print(f"Erro ao carregar config: {e}")
                 # Mantém os padrões em caso de erro
@@ -127,7 +156,8 @@ class InterceptConfig:
                     'api_url': self.oast_api_url,
                     'api_key': self.oast_api_key,
                     'base_domain': self.oast_base_domain
-                }
+                },
+                'active_scan_modules': self.active_scan_modules
             }
             with open(self.config_file, 'w', encoding='utf-8') as f:
                 json.dump(config_data, f, indent=2, ensure_ascii=False)
@@ -339,3 +369,16 @@ class InterceptConfig:
             'control_port': self.tor_control_port,
             'auto_start': self.tor_auto_start
         }
+
+    def get_active_scan_modules(self):
+        """Retorna configuracao de modulos do scanner ativo."""
+        return dict(self.active_scan_modules)
+
+    def set_active_scan_modules(self, modules: dict):
+        """Define modulos habilitados do scanner ativo."""
+        if not isinstance(modules, dict):
+            return False, "Formato invalido para modulos do scanner ativo."
+        self.active_scan_modules = modules
+        if self.save_config():
+            return True, "Configuracao de modulos atualizada."
+        return False, "Erro ao salvar configuracao."

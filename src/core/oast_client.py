@@ -28,6 +28,16 @@ class OASTClient:
         payload_domain = f"{interaction_id}.{self.base_domain}"
         return interaction_id, payload_domain
 
+    def is_available(self) -> bool:
+        """Checa se o endpoint OAST esta alcançavel."""
+        if not self.api_url:
+            return False
+        try:
+            response = requests.get(self.api_url, timeout=3)
+            return response is not None
+        except requests.exceptions.RequestException:
+            return False
+
     def check_hit(self, interaction_id: str) -> dict:
         """
         Verifica se uma interação (hit) ocorreu para um determinado ID.
