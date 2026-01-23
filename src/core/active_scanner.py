@@ -5,24 +5,47 @@ enviando payloads específicos e analisando as respostas.
 """
 import requests
 import os
+import json
 from datetime import datetime
 import re
-from typing import Dict, List, Any
+from typing import Dict, List, Any, Optional, Iterable, Union
 from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
 from .logger_config import log
 from .tor_manager import TorManager
+from .oast_client import OASTClient
+from src.scanners.rce_oast_module import RceOastModule
+from src.scanners.sqli_module import SqlInjectionModule
+from src.scanners.ssti_module import SstiModule
+from src.scanners.ssrf_oast_module import SsrfOastModule
+from src.scanners.open_redirect_module import OpenRedirectModule
+from src.scanners.header_injection_module import HeaderInjectionModule
+from src.scanners.lfi_module import LfiModule
+from src.scanners.xss_module import XssModule
+from src.scanners.idor_module import IdorModule
 
 class ActiveScanner:
     """
     Realiza a varredura ativa em requisições HTTP para encontrar vulnerabilidades.
     """
 
-    def __init__(self, use_tor: bool = False, tor_port: int = 9050):
+    def __init__(
+        self,
+        use_tor: bool = False,
+        tor_port: int = 9050,
+        oast_client: Optional[OASTClient] = None,
+        enabled_modules: Optional[Union[Dict[str, bool], Iterable[str]]] = None
+    ):
         self.session = requests.Session()
         self.session.verify = False
         self.use_tor = use_tor
         self.tor_port = tor_port
         self.tor_manager = None
+        self.oast_client = oast_client
+        self.oast_available = False
+        if self.oast_client and self.oast_client.is_available():
+            self.oast_available = True
+        self.enabled_modules = enabled_modules
+        self.scan_modules = self._load_scan_modules()
         self._logs_dir = None
         self.sql_error_patterns = [
             r"(?i)sql\s+syntax", r"(?i)mysql_fetch", r"(?i)unclosed\s+quotation\s+mark",
@@ -154,6 +177,206 @@ class ActiveScanner:
                             points.append({'type': 'body', 'name': name, 'value': value})
         log.debug(f"Pontos de inserção encontrados: {len(points)}")
         return points
+
+    def _load_scan_modules(self) -> List[Any]:
+        modules = []
+        enabled = self.enabled_modules
+        enabled_set = None
+        enabled_map = None
+        if isinstance(enabled, dict):
+            enabled_map = {str(k): bool(v) for k, v in enabled.items()}
+        elif enabled is not None:
+            enabled_set = {str(k) for k in enabled}
+        for module_cls in (
+            SqlInjectionModule,
+            RceOastModule,
+            SstiModule,
+            SsrfOastModule,
+            OpenRedirectModule,
+            HeaderInjectionModule,
+            LfiModule,
+            XssModule,
+            IdorModule,
+        ):
+            try:
+                name = module_cls.__name__
+                if name in ("RceOastModule", "SsrfOastModule") and not self.oast_available:
+                    continue
+                if enabled_map is not None and not enabled_map.get(name, False):
+                    continue
+                if enabled_set is not None and name not in enabled_set:
+                    continue
+                modules.append(module_cls())
+            except Exception as e:
+                log.debug(f"Falha ao carregar modulo {module_cls.__name__}: {e}")
+        return modules
+
+    def _build_request_node_for_modules(self, base_request: Dict[str, Any]) -> Dict[str, Any]:
+        headers = base_request.get('headers', {}) or {}
+        normalized_headers = dict(headers)
+        for key, value in headers.items():
+            lower = key.lower()
+            if lower == 'cookie' and key != 'Cookie':
+                normalized_headers['Cookie'] = value
+            if lower == 'content-type' and key != 'Content-Type':
+                normalized_headers['Content-Type'] = value
+        body = base_request.get('body', '') or ''
+        if isinstance(body, str):
+            body_blob = body.encode('utf-8', errors='ignore')
+        else:
+            body_blob = body or b''
+        return {
+            'id': base_request.get('id') or 0,
+            'method': base_request.get('method'),
+            'url': base_request.get('url'),
+            'headers': json.dumps(normalized_headers),
+            'request_body_blob': body_blob,
+        }
+
+    def _iter_json_points(self, data: Any, parent_key: str = "") -> List[Dict[str, str]]:
+        points = []
+        if isinstance(data, dict):
+            for key, value in data.items():
+                new_key = f"{parent_key}.{key}" if parent_key else key
+                if isinstance(value, (dict, list)):
+                    points.extend(self._iter_json_points(value, new_key))
+                else:
+                    points.append({'name': new_key, 'value': str(value)})
+        elif isinstance(data, list):
+            for i, item in enumerate(data):
+                new_key = f"{parent_key}[{i}]"
+                if isinstance(item, (dict, list)):
+                    points.extend(self._iter_json_points(item, new_key))
+                else:
+                    points.append({'name': new_key, 'value': str(item)})
+        return points
+
+    def _derive_injection_points_for_modules(self, base_request: Dict[str, Any]) -> List[Dict[str, Any]]:
+        points: List[Dict[str, Any]] = []
+        point_id = 1
+
+        url = base_request.get('url', '')
+        headers = base_request.get('headers', {}) or {}
+        body = base_request.get('body', '') or ''
+
+        parsed_url = urlparse(url)
+        query_params = parse_qs(parsed_url.query, keep_blank_values=True)
+        for name, values in query_params.items():
+            for value in values:
+                points.append({
+                    'id': point_id,
+                    'location': 'QUERY',
+                    'parameter_name': name,
+                    'original_value': value,
+                })
+                point_id += 1
+
+        content_type = ''
+        for key, value in headers.items():
+            if key.lower() == 'content-type':
+                content_type = value
+                break
+
+        if isinstance(body, bytes):
+            body_text = body.decode('utf-8', errors='ignore')
+        else:
+            body_text = body
+
+        if 'application/x-www-form-urlencoded' in (content_type or '') and body_text:
+            form_params = parse_qs(body_text, keep_blank_values=True)
+            for name, values in form_params.items():
+                for value in values:
+                    points.append({
+                        'id': point_id,
+                        'location': 'BODY_FORM',
+                        'parameter_name': name,
+                        'original_value': value,
+                    })
+                    point_id += 1
+
+        if 'application/json' in (content_type or '') and body_text:
+            try:
+                json_body = json.loads(body_text)
+                for item in self._iter_json_points(json_body):
+                    points.append({
+                        'id': point_id,
+                        'location': 'BODY_JSON',
+                        'parameter_name': item['name'],
+                        'original_value': item['value'],
+                    })
+                    point_id += 1
+            except Exception:
+                pass
+
+        exclude_headers = {
+            'content-length', 'host', 'connection', 'accept', 'accept-encoding',
+            'accept-language', 'user-agent', 'cache-control', 'pragma'
+        }
+        for name, value in headers.items():
+            if name.lower() in exclude_headers:
+                continue
+            points.append({
+                'id': point_id,
+                'location': 'HEADER',
+                'parameter_name': name,
+                'original_value': value,
+            })
+            point_id += 1
+
+        cookie_header = None
+        for name, value in headers.items():
+            if name.lower() == 'cookie':
+                cookie_header = value
+                break
+        if cookie_header:
+            cookie_parts = [c.strip() for c in cookie_header.split(';') if '=' in c]
+            for part in cookie_parts:
+                key, value = part.split('=', 1)
+                points.append({
+                    'id': point_id,
+                    'location': 'COOKIE',
+                    'parameter_name': key.strip(),
+                    'original_value': value.strip(),
+                })
+                point_id += 1
+
+        return points
+
+    def _module_vuln_to_dict(self, vuln: Any, base_request: Dict[str, Any]) -> Dict[str, Any]:
+        evidence = vuln.evidence
+        if isinstance(evidence, (dict, list)):
+            evidence_text = json.dumps(evidence, ensure_ascii=True, default=str)
+        else:
+            evidence_text = str(evidence)
+        return {
+            'type': vuln.name,
+            'severity': vuln.severity,
+            'source': 'Module',
+            'url': base_request.get('url', 'N/A'),
+            'method': base_request.get('method', 'N/A'),
+            'description': vuln.description,
+            'evidence': evidence_text,
+        }
+
+    def _run_scan_modules(self, base_request: Dict[str, Any]) -> List[Dict[str, Any]]:
+        if not self.scan_modules:
+            return []
+        request_node = self._build_request_node_for_modules(base_request)
+        injection_points = self._derive_injection_points_for_modules(base_request)
+        results: List[Dict[str, Any]] = []
+
+        for point in injection_points:
+            for module in self.scan_modules:
+                try:
+                    log.info(f"ScanAtivo - {module.__class__.__name__} (param: {point.get('parameter_name')})")
+                    vulns = module.run_test(request_node, point, self.oast_client)
+                    for vuln in vulns:
+                        results.append(self._module_vuln_to_dict(vuln, base_request))
+                except Exception as e:
+                    log.debug(f"Falha no modulo {module.__class__.__name__}: {e}")
+                    continue
+
+        return results
 
     def _send_modified_request(self, original_request: Dict, insertion_point: Dict, payload: str, context_tag: str = None) -> requests.Response:
         """Envia uma requisição modificada, com suporte a TOR."""
@@ -372,7 +595,7 @@ class ActiveScanner:
                             'url': base_request['url'],
                             'method': base_request['method'],
                             'description': f"Possível SQL Injection detectado no parâmetro '{point['name']}' com o payload '{payload}'.",
-                            'evidence': re.search(pattern, response.text, re.IGNORECASE).group(0),
+                            'evidence': f"Payload: {payload} | Match: {re.search(pattern, response.text, re.IGNORECASE).group(0)}",
                         }
                         vulnerabilities.append(vuln)
                         log.warning(f"SQL Injection detectado em {base_request['url']} no parâmetro {point['name']}")
@@ -405,7 +628,7 @@ class ActiveScanner:
                     'method': base_request['method'],
                     'description': f"SQL Injection Boolean-Based detectado no parâmetro '{point['name']}'. "
                                    f"Respostas TRUE e FALSE diferem significativamente.",
-                    'evidence': f"Original: {original_len} bytes, TRUE: {true_len} bytes, FALSE: {false_len} bytes",
+                    'evidence': f"Payloads: TRUE='{true_payload}' FALSE='{false_payload}' | Original: {original_len} bytes, TRUE: {true_len} bytes, FALSE: {false_len} bytes",
                 }
                 vulnerabilities.append(vuln)
                 log.warning(f"Boolean-Based SQL Injection detectado em {base_request['url']} no parâmetro {point['name']}")
@@ -440,7 +663,7 @@ class ActiveScanner:
                             'method': base_request['method'],
                             'description': f"SQL Injection Time-Based detectado no parâmetro '{point['name']}'. "
                                            f"Possível banco de dados: {db_type}",
-                            'evidence': f"Delay detectado: {delay_time - normal_time:.2f} segundos",
+                            'evidence': f"Payload: {payload} | Delay: {delay_time - normal_time:.2f}s",
                         }
                         vulnerabilities.append(vuln)
                         log.warning(f"Time-Based SQL Injection ({db_type}) detectado em {base_request['url']} no parâmetro {point['name']}")
@@ -565,7 +788,7 @@ class ActiveScanner:
                                 'method': base_request['method'],
                                 'description': f"Command Injection detectado no parâmetro '{point['name']}'. "
                                                f"Sistema operacional: {os_type}",
-                                'evidence': f"Delay detectado: {delay:.2f} segundos com payload '{payload}'",
+                                'evidence': f"Payload: {payload} | Delay: {delay:.2f}s",
                             }
                             vulnerabilities.append(vuln)
                             log.critical(f"Command Injection detectado em {base_request['url']} no parâmetro {point['name']}")
@@ -582,7 +805,7 @@ class ActiveScanner:
                                     'method': base_request['method'],
                                     'description': f"Command Injection detectado no parâmetro '{point['name']}'. "
                                                    f"Sistema operacional: {os_type}",
-                                    'evidence': re.search(pattern, response.text, re.IGNORECASE).group(0)[:200],
+                                    'evidence': f"Payload: {payload} | Match: {re.search(pattern, response.text, re.IGNORECASE).group(0)[:200]}",
                                 }
                                 vulnerabilities.append(vuln)
                                 log.critical(f"Command Injection detectado em {base_request['url']} no parâmetro {point['name']}")
@@ -975,13 +1198,21 @@ class ActiveScanner:
 
         for point in insertion_points:
             log.info(f"--- SCANNER DEBUG: Testando ponto de inserção: {point}")
+            log.info(f"ScanAtivo - SQLi (param: {point.get('name')})")
             vulnerabilities.extend(self._check_login_sqli(base_request, point))
             vulnerabilities.extend(self._check_sql_injection(base_request, point))
             vulnerabilities.extend(self._check_boolean_sqli(base_request, point))
             vulnerabilities.extend(self._check_time_based_sqli(base_request, point))
+            log.info(f"ScanAtivo - Command Injection (param: {point.get('name')})")
             vulnerabilities.extend(self._check_command_injection(base_request, point))
+            log.info(f"ScanAtivo - XSS (param: {point.get('name')})")
             vulnerabilities.extend(self._check_xss(base_request, point))
+            log.info(f"ScanAtivo - Path Traversal (param: {point.get('name')})")
             vulnerabilities.extend(self._check_path_traversal(base_request, point))
+
+        module_vulnerabilities = self._run_scan_modules(base_request)
+        if module_vulnerabilities:
+            vulnerabilities.extend(module_vulnerabilities)
 
         unique_vulns = [dict(t) for t in {tuple(d.items()) for d in vulnerabilities}]
         log.info(f"--- SCANNER DEBUG: Total de vulnerabilidades únicas encontradas: {len(unique_vulns)}")

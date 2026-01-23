@@ -22,6 +22,7 @@ from src.core.spider import Spider
 from src.core.websocket_history import WebSocketHistory
 from src.core.technology_manager import TechnologyManager
 from src.core.active_scanner import ActiveScanner
+from src.core.oast_client import OASTClient
 from src.core.browser_manager import BrowserManager
 from src.core.logger_config import log
 from src.ui.widgets.proxy_control_widget import ProxyControlWidget
@@ -71,7 +72,9 @@ class ProxyGUI(QMainWindow):
         self.technology_manager = TechnologyManager()
         self.active_scanner = ActiveScanner(
             use_tor=self.config.get_tor_enabled(),
-            tor_port=self.config.get_tor_port()
+            tor_port=self.config.get_tor_port(),
+            oast_client=OASTClient(self.config),
+            enabled_modules=self.config.get_active_scan_modules()
         )
         self.browser_manager = BrowserManager(
             proxy_port=self.config.get_port(),

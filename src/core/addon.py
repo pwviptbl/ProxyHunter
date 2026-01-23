@@ -13,6 +13,7 @@ from .scanner import VulnerabilityScanner
 from .spider import Spider
 from .websocket_history import WebSocketHistory
 from .active_scanner import ActiveScanner
+from .oast_client import OASTClient
 from .technology_manager import TechnologyManager
 from .technology_detector import TechnologyDetector
 from . import target_processor
@@ -34,7 +35,10 @@ class InterceptAddon:
             technology_detector=self.technology_detector,
             technology_manager=self.technology_manager
         )  # Scanner passivo
-        self.active_scanner = ActiveScanner()  # Scanner ativo
+        self.active_scanner = ActiveScanner(
+            oast_client=OASTClient(self.config),
+            enabled_modules=self.config.get_active_scan_modules()
+        )  # Scanner ativo
         self.spider = spider
         self.websocket_history = websocket_history
 
@@ -348,4 +352,3 @@ class InterceptAddon:
             flow_id = str(id(flow))
             self.websocket_history.close_connection(flow_id)
             log.info(f"WebSocket desconectado: {flow.request.pretty_url}")
-

@@ -134,7 +134,7 @@ class BrowserManager:
             print("[DEBUG] Playwright: nova página criada.")
             print("[DEBUG] Playwright: navegando para google.com...")
             #await self.page.goto("https://www.google.com")
-            await self.page.goto("http://127.0.0.1:5000")  # Página de teste local
+            await self.page.goto("http://127.0.0.1")  # Página de teste local
             print("[DEBUG] Playwright: navegação concluída.")
             # Garante que o navegador seja fechado quando a página for fechada pelo usuário
             self.page.on("close", self.close_browser_sync)
