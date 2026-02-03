@@ -291,6 +291,16 @@ chmod +x ProxyHunter-CLI.sh
 ./ProxyHunter-CLI.sh scan-both 3 --file logs/cli_history.json
 ```
 
+#### Scan passivo + ativo por dominio
+```bash
+./ProxyHunter-CLI.sh scan-both-domain 127.0.0.1:5001 --file logs/cli_history.json
+```
+
+#### Relatorio em Markdown
+```bash
+./ProxyHunter-CLI.sh report-md --domain 127.0.0.1:5001 --file logs/cli_history.json --out logs/report.md
+```
+
 > 💡 **Nota**: A pasta `logs/` e os arquivos de historico/spider sao gerados automaticamente e estao no `.gitignore`.
 
 ### 3.1. Intercept Manual (Forward/Drop)

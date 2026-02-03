@@ -285,6 +285,33 @@ def _merge_vulns(entry, new_vulns):
     entry["vulnerabilities"] = existing
     return added
 
+def _extract_vulns(entries, domain: str | None = None):
+    items = []
+    for entry in entries:
+        url = str(entry.get("url", ""))
+        if domain and domain.lower() not in url.lower():
+            continue
+        for vuln in entry.get("vulnerabilities") or []:
+            items.append(vuln)
+    return items
+
+def _group_vulns(vulns):
+    severity_order = ["Critical", "High", "Medium", "Low", "Info"]
+    groups = {k: [] for k in severity_order}
+    for v in vulns:
+        sev = v.get("severity") or "Info"
+        if sev not in groups:
+            groups[sev] = []
+        groups[sev].append(v)
+    return groups, severity_order
+
+def _write_text(path: str, content: str):
+    directory = os.path.dirname(path)
+    if directory:
+        os.makedirs(directory, exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(content)
+
 
 @cli.command('crawl')
 @click.option('--url', 'start_urls', multiple=True, required=True, help="URL(s) iniciais para navegacao.")
@@ -521,6 +548,118 @@ def scan_both(request_id, history_file):
             click.echo(f"  - [{v.get('severity')}] {v.get('type')} em {v.get('url')}")
     else:
         click.echo(click.style("✓ Nenhuma vulnerabilidade detectada.", fg="green"))
+
+
+@cli.command('scan-both-domain')
+@click.argument('domain', type=str)
+@click.option('--file', 'history_file', default="logs/cli_history.json", show_default=True, help="Arquivo de historico.")
+@click.option('--limit', default=None, type=int, help="Limite de entradas a escanear.")
+def scan_both_domain(domain, history_file, limit):
+    """Executa scanner passivo e ativo em todas as entradas de um dominio."""
+    try:
+        entries = _load_json(history_file)
+    except FileNotFoundError:
+        click.echo(f"Arquivo nao encontrado: {history_file}")
+        return
+
+    domain = domain.strip().lower()
+    if not domain:
+        click.echo("Dominio invalido.")
+        return
+
+    matches = []
+    for item in entries:
+        url = str(item.get("url", ""))
+        if domain in url.lower():
+            matches.append(item)
+
+    if not matches:
+        click.echo(f"Nenhuma entrada encontrada para o dominio: {domain}")
+        return
+
+    if limit is not None:
+        matches = matches[:max(1, limit)]
+
+    scanner = VulnerabilityScanner()
+    config = InterceptConfig()
+    active = ActiveScanner(
+        oast_client=OASTClient(config),
+        enabled_modules=config.get_active_scan_modules()
+    )
+
+    total_added = 0
+    for entry in matches:
+        passive = scanner.scan_entry(entry)
+        total_added += _merge_vulns(entry, passive)
+
+        base_request = {
+            'method': entry.get('method', ''),
+            'url': entry.get('url', ''),
+            'headers': entry.get('request_headers', {}) or {},
+            'body': entry.get('request_body', '') or '',
+        }
+        active_vulns = active.scan_request(base_request)
+        total_added += _merge_vulns(entry, active_vulns)
+
+    _save_json(history_file, entries)
+    click.echo(click.style(f"✓ Scan concluido para {len(matches)} entradas. Novas vulnerabilidades: {total_added}.", fg="green"))
+
+
+@cli.command('report-md')
+@click.option('--domain', default=None, help="Filtra vulnerabilidades por dominio/host.")
+@click.option('--file', 'history_file', default="logs/cli_history.json", show_default=True, help="Arquivo de historico.")
+@click.option('--out', 'out_file', default="logs/report.md", show_default=True, help="Arquivo de saida do relatorio.")
+def report_md(domain, history_file, out_file):
+    """Gera relatorio em Markdown a partir do historico."""
+    try:
+        entries = _load_json(history_file)
+    except FileNotFoundError:
+        click.echo(f"Arquivo nao encontrado: {history_file}")
+        return
+
+    vulns = _extract_vulns(entries, domain=domain)
+    if not vulns:
+        click.echo("Nenhuma vulnerabilidade encontrada para relatorio.")
+        return
+
+    groups, order = _group_vulns(vulns)
+    total = sum(len(v) for v in groups.values())
+
+    lines = []
+    lines.append("# Relatorio de Vulnerabilidades (CLI)")
+    if domain:
+        lines.append(f"- Dominio: {domain}")
+    lines.append(f"- Total: {total}")
+    lines.append("")
+    lines.append("## Resumo por Severidade")
+    for sev in order:
+        lines.append(f"- {sev}: {len(groups.get(sev, []))}")
+    lines.append("")
+
+    lines.append("## Detalhes")
+    for sev in order:
+        items = groups.get(sev, [])
+        if not items:
+            continue
+        lines.append(f"### {sev}")
+        for v in items:
+            vtype = v.get("type", "N/A")
+            url = v.get("url", "N/A")
+            method = v.get("method", "")
+            desc = v.get("description", "")
+            evidence = v.get("evidence", "")
+            lines.append(f"- **{vtype}**")
+            lines.append(f"  - URL: {url}")
+            if method:
+                lines.append(f"  - Metodo: {method}")
+            if desc:
+                lines.append(f"  - Descricao: {desc}")
+            if evidence:
+                lines.append(f"  - Evidencia: `{str(evidence)[:200]}`")
+        lines.append("")
+
+    _write_text(out_file, "\n".join(lines).strip() + "\n")
+    click.echo(click.style(f"✓ Relatorio gerado em: {out_file}", fg="green"))
 
 
 @cli.group('spider')
