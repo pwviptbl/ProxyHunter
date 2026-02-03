@@ -186,4 +186,4 @@ if __name__ == '__main__':
     
     print("Servidor vulnerável iniciado em http://127.0.0.1")
     print("Use Ctrl+C para parar o servidor.")
-    app.run(debug=True, port=5000)
+    app.run(debug=True, port=5001)

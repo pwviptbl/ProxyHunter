@@ -1,6 +1,7 @@
 mitmproxy
 playwright
 requests
+click
 PyJWT
 PySide6
 google-generativeai
