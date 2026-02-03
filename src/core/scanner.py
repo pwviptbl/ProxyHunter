@@ -474,6 +474,24 @@ class VulnerabilityScanner:
             'headers': dict(flow.response.headers),
             'body': flow.response.get_text(strict=False) or "",
         }
+        return self._scan_from_data(request_data, response_data)
+
+    def scan_entry(self, entry: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Executa o scanner passivo a partir de uma entrada do historico."""
+        request_data = {
+            'method': entry.get('method', ''),
+            'url': entry.get('url', ''),
+            'headers': entry.get('request_headers', {}) or {},
+            'body': entry.get('request_body', '') or "",
+        }
+        response_data = {
+            'status': entry.get('status', 0),
+            'headers': entry.get('response_headers', {}) or {},
+            'body': entry.get('response_body', '') or "",
+        }
+        return self._scan_from_data(request_data, response_data)
+
+    def _scan_from_data(self, request_data: Dict[str, Any], response_data: Dict[str, Any]) -> List[Dict[str, Any]]:
         vulnerabilities = []
         vulnerabilities.extend(self._scan_for_secrets(request_data, response_data))
         vulnerabilities.extend(self._detect_sql_injection(request_data, response_data))

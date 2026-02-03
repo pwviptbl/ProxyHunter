@@ -125,6 +125,9 @@ def remove_rule(index):
 from mitmproxy.tools.dump import DumpMaster
 from mitmproxy import options
 from src.core.logger_config import log
+from src.core.scanner import VulnerabilityScanner
+from src.core.active_scanner import ActiveScanner
+from src.core.oast_client import OASTClient
 
 
 @cli.command('toggle')
@@ -262,6 +265,26 @@ def _load_json(path: str):
     with open(path, "r", encoding="utf-8") as f:
         return json.load(f)
 
+def _find_entry(entries, request_id: int):
+    for item in entries:
+        if item.get("id") == request_id:
+            return item
+    return None
+
+def _merge_vulns(entry, new_vulns):
+    if not new_vulns:
+        return 0
+    existing = entry.get("vulnerabilities") or []
+    existing_set = {str(v) for v in existing}
+    added = 0
+    for v in new_vulns:
+        if str(v) not in existing_set:
+            existing.append(v)
+            existing_set.add(str(v))
+            added += 1
+    entry["vulnerabilities"] = existing
+    return added
+
 
 @cli.command('crawl')
 @click.option('--url', 'start_urls', multiple=True, required=True, help="URL(s) iniciais para navegacao.")
@@ -385,6 +408,119 @@ def history_list(history_file, limit):
             f"{entry.get('status', ''):<6} "
             f"{entry.get('url', '')}"
         )
+
+
+@cli.command('scan-passive')
+@click.argument('request_id', type=int)
+@click.option('--file', 'history_file', default="logs/cli_history.json", show_default=True, help="Arquivo de historico.")
+def scan_passive(request_id, history_file):
+    """Executa o scanner passivo em uma entrada do historico salvo."""
+    try:
+        entries = _load_json(history_file)
+    except FileNotFoundError:
+        click.echo(f"Arquivo nao encontrado: {history_file}")
+        return
+
+    entry = _find_entry(entries, request_id)
+
+    if not entry:
+        click.echo(f"ID {request_id} nao encontrado no historico.")
+        return
+
+    scanner = VulnerabilityScanner()
+    vulns = scanner.scan_entry(entry)
+    if vulns:
+        _merge_vulns(entry, vulns)
+        _save_json(history_file, entries)
+        click.echo(click.style(f"✓ {len(vulns)} vulnerabilidades detectadas:", fg="green"))
+        for v in vulns:
+            click.echo(f"  - [{v.get('severity')}] {v.get('type')} em {v.get('url')}")
+    else:
+        click.echo(click.style("✓ Nenhuma vulnerabilidade detectada.", fg="green"))
+
+
+@cli.command('scan-active')
+@click.argument('request_id', type=int)
+@click.option('--file', 'history_file', default="logs/cli_history.json", show_default=True, help="Arquivo de historico.")
+def scan_active(request_id, history_file):
+    """Executa o scanner ativo em uma entrada do historico salvo."""
+    try:
+        entries = _load_json(history_file)
+    except FileNotFoundError:
+        click.echo(f"Arquivo nao encontrado: {history_file}")
+        return
+
+    entry = _find_entry(entries, request_id)
+    if not entry:
+        click.echo(f"ID {request_id} nao encontrado no historico.")
+        return
+
+    config = InterceptConfig()
+    active = ActiveScanner(
+        oast_client=OASTClient(config),
+        enabled_modules=config.get_active_scan_modules()
+    )
+    base_request = {
+        'method': entry.get('method', ''),
+        'url': entry.get('url', ''),
+        'headers': entry.get('request_headers', {}) or {},
+        'body': entry.get('request_body', '') or '',
+    }
+    vulns = active.scan_request(base_request)
+    if vulns:
+        _merge_vulns(entry, vulns)
+        _save_json(history_file, entries)
+        click.echo(click.style(f"✓ {len(vulns)} vulnerabilidades detectadas:", fg="green"))
+        for v in vulns:
+            click.echo(f"  - [{v.get('severity')}] {v.get('type')} em {v.get('url')}")
+    else:
+        click.echo(click.style("✓ Nenhuma vulnerabilidade detectada.", fg="green"))
+
+
+@cli.command('scan-both')
+@click.argument('request_id', type=int)
+@click.option('--file', 'history_file', default="logs/cli_history.json", show_default=True, help="Arquivo de historico.")
+def scan_both(request_id, history_file):
+    """Executa scanner passivo e ativo na mesma entrada."""
+    try:
+        entries = _load_json(history_file)
+    except FileNotFoundError:
+        click.echo(f"Arquivo nao encontrado: {history_file}")
+        return
+
+    entry = _find_entry(entries, request_id)
+    if not entry:
+        click.echo(f"ID {request_id} nao encontrado no historico.")
+        return
+
+    total = 0
+    scanner = VulnerabilityScanner()
+    passive = scanner.scan_entry(entry)
+    if passive:
+        total += _merge_vulns(entry, passive)
+
+    config = InterceptConfig()
+    active = ActiveScanner(
+        oast_client=OASTClient(config),
+        enabled_modules=config.get_active_scan_modules()
+    )
+    base_request = {
+        'method': entry.get('method', ''),
+        'url': entry.get('url', ''),
+        'headers': entry.get('request_headers', {}) or {},
+        'body': entry.get('request_body', '') or '',
+    }
+    active_vulns = active.scan_request(base_request)
+    if active_vulns:
+        total += _merge_vulns(entry, active_vulns)
+
+    if total:
+        _save_json(history_file, entries)
+        click.echo(click.style(f"✓ {total} vulnerabilidades detectadas:", fg="green"))
+        for v in (passive or []) + (active_vulns or []):
+            click.echo(f"  - [{v.get('severity')}] {v.get('type')} em {v.get('url')}")
+    else:
+        click.echo(click.style("✓ Nenhuma vulnerabilidade detectada.", fg="green"))
 
 
 @cli.group('spider')

@@ -55,6 +55,9 @@ Aplicação Python com interface gráfica que permite configurar regras de inter
 - ✅ Visualização detalhada de Request/Response
 - ✅ Filtros por método HTTP e regex de domínio
 - ✅ Interface de Linha de Comando (CLI) para gerenciamento de regras e execução headless
+  - ✅ Crawl automatico via CLI (HTTP ou Playwright com JS)
+  - ✅ Exportacao de historico e spider em JSON
+  - ✅ Scan passivo por ID no historico salvo
 
 ## Roadmap (Ideias de Próximas Funcionalidades)
 
@@ -248,6 +251,47 @@ python cli.py run --port 9090
 ```
 
 > 💡 **Dica**: Ao alterar a porta, lembre-se de atualizar também as configurações do seu navegador para usar a nova porta.
+
+### 3.X. CLI (Crawl + Historico)
+
+Para usar a CLI com ambiente virtual e dependencias automaticas:
+
+```bash
+chmod +x ProxyHunter-CLI.sh
+./ProxyHunter-CLI.sh --help
+```
+
+#### Crawl simples (HTTP)
+```bash
+./ProxyHunter-CLI.sh crawl --url http://alvo.local --depth 2 --max-pages 200 --max-forms 200
+```
+
+#### Crawl com navegador (Playwright, JS)
+```bash
+./ProxyHunter-CLI.sh crawl --url http://alvo.local --depth 2 --max-pages 200 --max-forms 200 --browser
+```
+
+#### Listar historico salvo
+```bash
+./ProxyHunter-CLI.sh history list --file logs/cli_history.json --limit 50
+```
+
+#### Scan passivo por ID
+```bash
+./ProxyHunter-CLI.sh scan-passive 3 --file logs/cli_history.json
+```
+
+#### Scan ativo por ID
+```bash
+./ProxyHunter-CLI.sh scan-active 3 --file logs/cli_history.json
+```
+
+#### Scan passivo + ativo (mesmo ID)
+```bash
+./ProxyHunter-CLI.sh scan-both 3 --file logs/cli_history.json
+```
+
+> 💡 **Nota**: A pasta `logs/` e os arquivos de historico/spider sao gerados automaticamente e estao no `.gitignore`.
 
 ### 3.1. Intercept Manual (Forward/Drop)
 
