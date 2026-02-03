@@ -263,12 +263,12 @@ chmod +x ProxyHunter-CLI.sh
 
 #### Crawl simples (HTTP)
 ```bash
-./ProxyHunter-CLI.sh crawl --url http://alvo.local --depth 2 --max-pages 200 --max-forms 200
+./ProxyHunter-CLI.sh crawl --url http://example.com --depth 2 --max-pages 200 --max-forms 200
 ```
 
 #### Crawl com navegador (Playwright, JS)
 ```bash
-./ProxyHunter-CLI.sh crawl --url http://alvo.local --depth 2 --max-pages 200 --max-forms 200 --browser
+./ProxyHunter-CLI.sh crawl --url example.com --depth 3 --max-pages 200 --max-forms 200 --browser
 ```
 
 #### Listar historico salvo
@@ -293,12 +293,12 @@ chmod +x ProxyHunter-CLI.sh
 
 #### Scan passivo + ativo por dominio
 ```bash
-./ProxyHunter-CLI.sh scan-both-domain 127.0.0.1:5001 --file logs/cli_history.json
+./ProxyHunter-CLI.sh scan-both-domain example.com --file logs/cli_history.json
 ```
 
 #### Relatorio em Markdown
 ```bash
-./ProxyHunter-CLI.sh report-md --domain 127.0.0.1:5001 --file logs/cli_history.json --out logs/report.md
+./ProxyHunter-CLI.sh report-md --domain example.com --file logs/cli_history.json --out logs/report.md
 ```
 
 > 💡 **Nota**: A pasta `logs/` e os arquivos de historico/spider sao gerados automaticamente e estao no `.gitignore`.
