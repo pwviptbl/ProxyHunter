@@ -324,9 +324,11 @@ def _write_text(path: str, content: str):
 @click.option('--no-submit-forms', is_flag=True, default=False, help="Nao submeter formularios.")
 @click.option('--browser', is_flag=True, default=False, help="Usar Playwright (renderiza JS).")
 @click.option('--headful', is_flag=True, default=False, help="Abrir navegador visivel (Playwright).")
+@click.option('--probe-common-paths', is_flag=True, default=False, help="Tentar caminhos comuns (ex: /login, /register).")
+@click.option('--common-paths', default="login,register,signup,signin,admin,dashboard,auth,users,user,api,health,status", show_default=True, help="Lista separada por virgula de caminhos para testar.")
 @click.option('--history-out', default="logs/cli_history.json", show_default=True, help="Arquivo de saida do historico.")
 @click.option('--spider-out', default="logs/cli_spider.json", show_default=True, help="Arquivo de saida do spider.")
-def crawl(start_urls, depth, max_pages, max_forms, delay, timeout, port, no_submit_forms, browser, headful, history_out, spider_out):
+def crawl(start_urls, depth, max_pages, max_forms, delay, timeout, port, no_submit_forms, browser, headful, probe_common_paths, common_paths, history_out, spider_out):
     """Navega automaticamente e registra historico/spider para consulta."""
     config = InterceptConfig()
     if port is not None:
@@ -336,6 +338,10 @@ def crawl(start_urls, depth, max_pages, max_forms, delay, timeout, port, no_subm
     history = RequestHistory()
     spider = Spider()
     spider.start(target_urls=list(start_urls), max_depth=depth, max_urls=max_pages)
+
+    seed_paths = []
+    if probe_common_paths:
+        seed_paths = [p.strip() for p in (common_paths or "").split(",") if p.strip()]
 
     click.echo(f"Iniciando proxy em 127.0.0.1:{actual_port}...")
     master, thread = _start_proxy_background(config, actual_port, history=history, spider=spider)
@@ -353,6 +359,7 @@ def crawl(start_urls, depth, max_pages, max_forms, delay, timeout, port, no_subm
             timeout=timeout,
             submit_forms=not no_submit_forms,
             headless=not headful,
+            seed_paths=seed_paths,
         )
     else:
         navigator = AutoNavigator(
@@ -365,6 +372,7 @@ def crawl(start_urls, depth, max_pages, max_forms, delay, timeout, port, no_subm
             delay=delay,
             timeout=timeout,
             submit_forms=not no_submit_forms,
+            seed_paths=seed_paths,
         )
 
     try:

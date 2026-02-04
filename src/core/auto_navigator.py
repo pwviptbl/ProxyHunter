@@ -35,6 +35,7 @@ class AutoNavigator:
         timeout: int = 10,
         user_agent: Optional[str] = None,
         submit_forms: bool = True,
+        seed_paths: Optional[List[str]] = None,
     ):
         self.start_urls = [self._normalize_url(u) for u in start_urls]
         self.spider = spider
@@ -45,6 +46,7 @@ class AutoNavigator:
         self.delay = max(0.0, float(delay))
         self.timeout = max(1, int(timeout))
         self.submit_forms = bool(submit_forms)
+        self.seed_paths = [p if p.startswith("/") else f"/{p}" for p in (seed_paths or [])]
 
         self.session = requests.Session()
         self.session.verify = False
@@ -65,6 +67,8 @@ class AutoNavigator:
 
         for u in self.start_urls:
             self._queue.append((u, 0))
+            for seeded in self._seed_urls_for(u):
+                self._queue.append((seeded, 0))
 
         try:
             requests.packages.urllib3.disable_warnings()  # type: ignore[attr-defined]
@@ -226,6 +230,18 @@ class AutoNavigator:
             return f"http://{url}"
         return url
 
+    def _seed_urls_for(self, start_url: str) -> List[str]:
+        if not self.seed_paths:
+            return []
+        try:
+            parsed = urlparse(start_url)
+            base = f"{parsed.scheme}://{parsed.netloc}"
+        except Exception:
+            return []
+        if not base:
+            return []
+        return [f"{base}{path}" for path in self.seed_paths]
+
     def _is_in_scope(self, url: str) -> bool:
         try:
             return self.spider._is_in_scope(url)
@@ -282,6 +298,7 @@ class PlaywrightAutoNavigator:
         user_agent: Optional[str] = None,
         submit_forms: bool = True,
         headless: bool = True,
+        seed_paths: Optional[List[str]] = None,
     ):
         self.start_urls = [AutoNavigator._normalize_url(u) for u in start_urls]
         self.spider = spider
@@ -294,6 +311,7 @@ class PlaywrightAutoNavigator:
         self.submit_forms = bool(submit_forms)
         self.headless = bool(headless)
         self.user_agent = user_agent or "ProxyHunter-Playwright/1.0"
+        self.seed_paths = [p if p.startswith("/") else f"/{p}" for p in (seed_paths or [])]
 
         self.session = requests.Session()
         self.session.verify = False
@@ -312,6 +330,8 @@ class PlaywrightAutoNavigator:
 
         for u in self.start_urls:
             self._queue.append((u, 0))
+            for seeded in self._seed_urls_for(u):
+                self._queue.append((seeded, 0))
 
     async def crawl(self) -> Dict[str, int]:
         start_time = time.time()
@@ -501,6 +521,18 @@ class PlaywrightAutoNavigator:
             return self.spider._is_in_scope(url)
         except Exception:
             return True
+
+    def _seed_urls_for(self, start_url: str) -> List[str]:
+        if not self.seed_paths:
+            return []
+        try:
+            parsed = urlparse(start_url)
+            base = f"{parsed.scheme}://{parsed.netloc}"
+        except Exception:
+            return []
+        if not base:
+            return []
+        return [f"{base}{path}" for path in self.seed_paths]
 
     def _ensure_playwright_browsers(self, force: bool = False) -> None:
         cmd = [sys.executable, "-m", "playwright", "install", "chromium"]
