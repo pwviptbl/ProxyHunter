@@ -1,6 +1,5 @@
 mitmproxy
 requests
-ttkthemes
 click
 playwright
 PySide6
@@ -10,3 +9,4 @@ google-generativeai
 fpdf2
 stem
 requests[socks]
+

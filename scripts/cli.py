@@ -12,6 +12,7 @@ sys.path.insert(0, project_root)
 
 from src.core.config import InterceptConfig
 from src.core.auto_navigator import AutoNavigator, PlaywrightAutoNavigator
+from src.core.agent import AutonomousAgent, LLMConfig
 
 
 @click.group()
@@ -35,32 +36,6 @@ from src.core.addon import InterceptAddon
 addon_instance = InterceptAddon(config_instance, history_instance, spider=spider_instance)
 
 
-@cli.command('scan')
-@click.argument('request_id', type=int)
-def scan_request(request_id):
-    """
-    Executa o Scanner Ativo em uma requisição do histórico.
-
-    Nota: O proxy precisa ter capturado requisições na sessão atual
-    para que o histórico contenha itens a serem escaneados.
-    """
-    click.echo(f"Executando varredura ativa na requisição ID: {request_id}...")
-
-    # Simula a captura de alguns dados para que o histórico não esteja vazio
-    if not history_instance.get_history():
-        click.echo(click.style("Histórico vazio. O proxy precisa capturar tráfego primeiro.", fg="yellow"))
-        click.echo("Para fins de demonstração, o histórico não é persistido entre execuções.")
-        return
-
-    addon_instance.run_active_scan_on_request(request_id)
-
-    entry = history_instance.get_entry_by_id(request_id)
-    if entry and entry['vulnerabilities']:
-        click.echo(click.style("✓ Varredura concluída. Novas vulnerabilidades encontradas:", fg="green"))
-        for vuln in entry['vulnerabilities']:
-            click.echo(f"  - [{vuln['severity']}] {vuln['type']} em {vuln['description']}")
-    else:
-        click.echo(click.style("✓ Varredura concluída. Nenhuma nova vulnerabilidade encontrada.", fg="green"))
 
 
 @cli.command('list')
@@ -311,6 +286,18 @@ def _write_text(path: str, content: str):
         os.makedirs(directory, exist_ok=True)
     with open(path, "w", encoding="utf-8") as f:
         f.write(content)
+
+
+def _load_ai_config() -> dict:
+    """Carrega configuração de IA do arquivo unificado config/ai_config.json"""
+    config_path = os.path.join(project_root, "config", "ai_config.json")
+    if os.path.exists(config_path):
+        try:
+            with open(config_path, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return {}
 
 
 @cli.command('crawl')
@@ -707,5 +694,154 @@ def system_info():
     click.echo("Um valor comum e seguro é (núcleo * 5).")
 
 
+@cli.command('agent')
+@click.argument('url')
+@click.option('--objective', '-o', default="explorar site e mapear rotas", help="Objetivo da navegação.")
+@click.option('--username', '-u', default=None, help="Usuário para login (opcional).")
+@click.option('--password', '-p', default=None, help="Senha para login (opcional).")
+@click.option('--headful', is_flag=True, default=False, help="Abrir navegador visível.")
+def agent_navigate(url, objective, username, password, headful):
+    """
+    Navegação autônoma inteligente com LLM.
+    
+    O agente explora o site automaticamente, preenche formulários,
+    e registra TODAS as requisições e rotas descobertas.
+    
+    Configuração do LLM: config/ai_config.json
+    
+    Exemplos:
+    
+        proxyhunter agent https://example.com
+        
+        proxyhunter agent https://app.com -o "fazer login" -u admin -p secret
+        
+        proxyhunter agent https://site.com --headful
+    """
+    # Carrega configuração do arquivo unificado
+    ai_config = _load_ai_config()
+    
+    # Resolve provider do config
+    provider = ai_config.get("provider", "gemini")
+    
+    # Resolve API key (env > config)
+    if provider == "gemini":
+        api_key = os.environ.get("GEMINI_API_KEY") or ai_config.get("api_key")
+    elif provider == "openai":
+        api_key = os.environ.get("OPENAI_API_KEY") or ai_config.get("api_key")
+    else:
+        api_key = ai_config.get("api_key", "")
+    
+    # Valida API key para providers que precisam
+    if provider in ("gemini", "openai") and not api_key:
+        click.echo(click.style("❌ API key não encontrada!", fg="red"))
+        click.echo("Configure em config/ai_config.json")
+        return
+    
+    # Resolve modelo do config
+    model = ai_config.get("model")
+    if not model:
+        defaults = {"gemini": "gemini-2.0-flash", "openai": "gpt-4", "ollama": "llama3"}
+        model = defaults.get(provider, "gemini-2.0-flash")
+    
+    # Resolve configurações do agente
+    max_steps = ai_config.get("max_steps", 50)
+    
+    # Configura LLM
+    llm_config = LLMConfig(
+        provider=provider,
+        api_key=api_key or "",
+        model=model,
+        temperature=ai_config.get("temperature", 0.3),
+    )
+    
+    # Credenciais
+    credentials = None
+    if username and password:
+        credentials = (username, password)
+    
+    # Caminhos de saída
+    history_out = "logs/cli_history.json"
+    spider_out = "logs/cli_spider.json"
+    
+    click.echo(click.style("=" * 60, fg="cyan"))
+    click.echo(click.style("🤖 Iniciando Agente Autônomo Inteligente", bold=True, fg="cyan"))
+    click.echo(click.style("=" * 60, fg="cyan"))
+    click.echo(f"  Alvo: {url}")
+    click.echo(f"  Objetivo: {objective}")
+    click.echo(f"  LLM: {provider}/{model}")
+    if credentials:
+        click.echo(f"  Credenciais: {username}/****")
+    click.echo()
+    
+    # Cria agente (captura requisições via Playwright hooks)
+    agent = AutonomousAgent(
+        target_url=url,
+        objective=objective,
+        llm_config=llm_config,
+        credentials=credentials,
+        proxy_port=None,
+        max_steps=max_steps,
+        max_depth=3,
+        headless=not headful,
+    )
+    
+    # Executa
+    result = {}
+    try:
+        result = asyncio.run(agent.run())
+    except KeyboardInterrupt:
+        click.echo("\n⚠️ Agente interrompido pelo usuário.")
+        result = {"status": "interrupted", "actions_count": 0, "captured_requests": [], "routes": []}
+    except Exception as e:
+        click.echo(click.style(f"\n❌ Erro: {e}", fg="red"))
+        result = {"status": "error", "error": str(e), "captured_requests": [], "routes": []}
+    
+    # Extrai dados capturados
+    captured_requests = result.get("captured_requests", [])
+    routes = result.get("routes", [])
+    
+    # Salva histórico (formato compatível com scan-passive/active)
+    _save_json(history_out, captured_requests)
+    
+    # Salva spider com rotas descobertas
+    spider_data = {
+        "target_url": url,
+        "urls": [r.get("url") for r in routes if r.get("url")],
+        "routes_count": len(routes),
+        "requests_count": len(captured_requests),
+    }
+    _save_json(spider_out, spider_data)
+    
+    # Exibe resultado
+    click.echo()
+    click.echo(click.style("=" * 60, fg="cyan"))
+    click.echo(click.style("📊 Resultado da Navegação", bold=True, fg="cyan"))
+    click.echo(click.style("=" * 60, fg="cyan"))
+    click.echo(f"  Status: {result.get('status', 'N/A')}")
+    click.echo(f"  Ações executadas: {result.get('actions_count', 0)}")
+    click.echo(f"  Páginas visitadas: {result.get('pages_visited', 0)}")
+    click.echo(f"  Rotas descobertas: {len(routes)}")
+    click.echo(f"  Requisições capturadas: {len(captured_requests)}")
+    click.echo(f"  Duração: {result.get('duration_seconds', 0)}s")
+    click.echo()
+    click.echo(f"  Histórico: {history_out}")
+    click.echo(f"  Spider: {spider_out}")
+    
+    # Lista rotas
+    if routes:
+        click.echo()
+        click.echo(click.style("Rotas descobertas:", bold=True))
+        for route in routes[:10]:
+            click.echo(f"  - {route.get('url', 'N/A')}")
+        if len(routes) > 10:
+            click.echo(f"  ... e mais {len(routes) - 10} rotas")
+    
+    click.echo()
+    click.echo("Para scans use:")
+    click.echo(f"  proxyhunter scan-passive <ID> --file {history_out}")
+    click.echo(f"  proxyhunter scan-active <ID> --file {history_out}")
+
+
 if __name__ == "__main__":
     cli()
+

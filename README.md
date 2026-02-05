@@ -58,6 +58,12 @@ Aplicação Python com interface gráfica que permite configurar regras de inter
   - ✅ Crawl automatico via CLI (HTTP ou Playwright com JS)
   - ✅ Exportacao de historico e spider em JSON
   - ✅ Scan passivo por ID no historico salvo
+  - ✅ **Agente Autônomo Inteligente** 🤖 - Navegação com IA (LLM):
+    - Usa Gemini, OpenAI ou Ollama para decidir ações
+    - Identifica e preenche formulários automaticamente
+    - Mapeia rotas e descobre páginas sozinho
+    - Suporta login com credenciais
+    - Sessões persistentes (pode retomar depois)
 
 ## Roadmap (Ideias de Próximas Funcionalidades)
 
@@ -301,7 +307,53 @@ chmod +x ProxyHunter-CLI.sh
 ./ProxyHunter-CLI.sh report-md --domain example.com --file logs/cli_history.json --out logs/report.md
 ```
 
+### 3.Y. Agente Autônomo Inteligente 🤖
+
+O agente autônomo usa **IA (LLM)** para navegar em sites como um humano faria - identificando elementos, preenchendo formulários e mapeando rotas automaticamente. Captura TODAS as requisições e salva automaticamente.
+
+#### Navegação simples (explorar site)
+```bash
+./ProxyHunter-CLI.sh agent http://example.com
+```
+
+#### Com objetivo específico
+```bash
+./ProxyHunter-CLI.sh agent http://example.com -o "explorar páginas e preencher formulários"
+```
+
+#### Com credenciais para login
+```bash
+./ProxyHunter-CLI.sh agent http://example.com -o "fazer login e mapear área logada" -u admin -p secret
+```
+
+#### Ver navegador (modo visual)
+```bash
+./ProxyHunter-CLI.sh agent http://example.com --headful
+```
+
+**Arquivos gerados:**
+- `logs/cli_history.json` - Histórico de requisições (compatível com scan-passive/active)
+- `logs/cli_spider.json` - Rotas descobertas
+
+**Configuração do LLM** (`config/ai_config.json`):
+```json
+{
+    "provider": "gemini",
+    "api_key": "YOUR_API_KEY",
+    "model": "gemini-2.0-flash",
+    "max_steps": 50
+}
+```
+
+**Providers suportados:**
+- **Gemini** (padrão) - Configure `GEMINI_API_KEY` ou `config/ai_config.json`
+- **OpenAI** - Configure `OPENAI_API_KEY` ou `config/ai_config.json`
+- **Ollama** - Local, sem API key necessária
+
+> ⚠️ **Nota**: Sem credenciais, o agente preenche formulários com dados aleatórios para mapear rotas.
+
 > 💡 **Nota**: A pasta `logs/` e os arquivos de historico/spider sao gerados automaticamente e estao no `.gitignore`.
+
 
 ### 3.1. Intercept Manual (Forward/Drop)
 
