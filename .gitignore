@@ -35,6 +35,8 @@ env/
 
 # Configuration files (pode conter dados sensíveis)
 intercept_config.json
+.copilot_token_cache.json
+.github_oauth_token.json
 
 # mitmproxy
 .mitmproxy/

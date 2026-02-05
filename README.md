@@ -349,8 +349,55 @@ O agente autônomo usa **IA (LLM)** para navegar em sites como um humano faria -
 - **Gemini** (padrão) - Configure `GEMINI_API_KEY` ou `config/ai_config.json`
 - **OpenAI** - Configure `OPENAI_API_KEY` ou `config/ai_config.json`
 - **Ollama** - Local, sem API key necessária
+- **GitHub Copilot** 🆕 - Usa OAuth Device Flow (gratuito para assinantes Copilot)
+
+#### Autenticação GitHub Copilot 🔐
+
+O GitHub Copilot permite usar modelos como `gpt-4o`, `claude-sonnet-4`, `gemini-2.5-pro` **gratuitamente** (para assinantes) via autenticação OAuth.
+
+**1. Fazer Login (uma única vez):**
+```bash
+cd /home/kali/Modelos/ProxyHunter
+source .venv/bin/activate
+python3 -c "from src.core.auth.github_auth import GitHubAuth; GitHubAuth().authenticate()"
+```
+
+O processo vai:
+1. Abrir automaticamente o navegador em `https://github.com/login/device`
+2. Mostrar um código no terminal (ex: `ABCD-1234`)
+3. Cole o código no navegador e autorize
+4. O token será salvo automaticamente em `.github_oauth_token.json`
+
+**2. Configurar `config/ai_config.json`:**
+```json
+{
+    "provider": "github-copilot",
+    "model": "gpt-4o",
+    "temperature": 0.3,
+    "max_steps": 50
+}
+```
+
+**3. Modelos disponíveis via Copilot:**
+
+| Modelo | Custo | Descrição |
+|--------|-------|-----------|
+| `gpt-4o` | 0x (gratuito) | Rápido, bom para tarefas gerais |
+| `gpt-5-mini` | 0x (gratuito) | Otimizado para tarefas leves |
+| `claude-haiku-4.5` | 0.33x | Bom para organizar contexto |
+| `claude-sonnet-4` | 1x | Raciocínio equilibrado |
+| `gemini-2.5-pro` | 1x | Multimodal, análise de imagens |
+| `gpt-5` | 1x | Modelo principal OpenAI |
+
+**4. Verificar status da autenticação:**
+```bash
+python3 -c "from src.core.auth.github_auth import GitHubAuth; auth = GitHubAuth(); print(auth.get_status())"
+```
+- `CONNECTED` = Pronto para usar
+- `DISCONNECTED` = Precisa fazer login
 
 > ⚠️ **Nota**: Sem credenciais, o agente preenche formulários com dados aleatórios para mapear rotas.
+
 
 > 💡 **Nota**: A pasta `logs/` e os arquivos de historico/spider sao gerados automaticamente e estao no `.gitignore`.
 

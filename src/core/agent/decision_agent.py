@@ -223,7 +223,7 @@ class DecisionAgent:
         """
         Chama API do LLM.
         
-        Suporta múltiplos providers: Gemini, OpenAI, Ollama.
+        Suporta múltiplos providers: Gemini, OpenAI, Ollama, GitHub Copilot.
         """
         provider = self.llm_config.provider.lower()
         
@@ -233,6 +233,8 @@ class DecisionAgent:
             return await self._call_openai(prompt)
         elif provider == "ollama":
             return await self._call_ollama(prompt)
+        elif provider in ("github-copilot", "github_copilot", "copilot"):
+            return await self._call_github_copilot(prompt)
         else:
             raise ValueError(f"Provider não suportado: {provider}")
     
@@ -333,6 +335,63 @@ class DecisionAgent:
                 
         except Exception as e:
             raise RuntimeError(f"Erro ao chamar Ollama: {e}")
+    
+    async def _call_github_copilot(self, prompt: str) -> str:
+        """Chama API do GitHub Copilot."""
+        try:
+            import httpx
+            from ..auth.github_auth import GitHubAuth
+            
+            # Obter token do Copilot
+            auth = GitHubAuth()
+            copilot_token = auth.get_copilot_token()
+            
+            if not copilot_token:
+                raise RuntimeError(
+                    "Token Copilot não disponível. Execute:\n"
+                    "  from src.core.auth.github_auth import GitHubAuth\n"
+                    "  GitHubAuth().authenticate()"
+                )
+            
+            # Endpoint do Copilot Chat (mesma URL do ShadowOrchestrator)
+            endpoint = "https://api.individual.githubcopilot.com/chat/completions"
+            
+            # Preparar payload compatível com OpenAI
+            payload = {
+                "model": self.llm_config.model,
+                "messages": [
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "user", "content": prompt},
+                ],
+                "temperature": self.llm_config.temperature,
+                "max_tokens": self.llm_config.max_tokens,
+                "stream": False,
+            }
+            
+            headers = {
+                "Authorization": f"Bearer {copilot_token}",
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+                "Editor-Version": "vscode/1.95.0",
+                "Editor-Plugin-Version": "copilot-chat/0.23.0",
+                "Copilot-Integration-Id": "vscode-chat",
+                "Openai-Intent": "conversation-panel",
+            }
+            
+            async with httpx.AsyncClient(timeout=self.llm_config.timeout) as client:
+                response = await client.post(endpoint, json=payload, headers=headers)
+                response.raise_for_status()
+                data = response.json()
+                
+                # Formato OpenAI-compatible
+                return data["choices"][0]["message"]["content"]
+                
+        except ImportError:
+            raise ImportError("httpx não instalado. Execute: pip install httpx")
+        except httpx.HTTPStatusError as e:
+            raise RuntimeError(f"Erro HTTP do Copilot: {e.response.status_code} - {e.response.text}")
+        except Exception as e:
+            raise RuntimeError(f"Erro ao chamar GitHub Copilot: {e}")
     
     def _parse_response(self, response: str) -> Action:
         """
