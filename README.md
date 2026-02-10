@@ -10,75 +10,92 @@ Aplicação Python com interface gráfica que permite configurar regras de inter
 
 ## Funcionalidades
 
-- ✅ Interface gráfica intuitiva (PySide6)
-- ✅ Configuração de múltiplas regras de interceptação
-- ✅ Suporte para GET (query string) e POST (form data)
-- ✅ Ativar/desativar regras individualmente
-- ✅ Persistência de configurações em JSON
-- ✅ **Porta Configurável** - Escolha a porta do proxy (padrão: 9507)
-- ✅ **Intercept Manual (Forward/Drop)** - Funcionalidade inspirada no Burp Suite
-- ✅ **WebSocket Support** 🔌 - Interceptação e monitoramento de WebSocket:
-  - Listagem de conexões WebSocket ativas e fechadas
-  - Visualização de mensagens enviadas/recebidas
-  - Suporte a mensagens de texto e binárias
-  - Histórico completo por conexão
-- ✅ **Intruder Avançado** 💥 - Ferramenta completa de ataque automatizado:
-  - 4 tipos de ataque (Sniper, Battering Ram, Pitchfork, Cluster Bomb)
-  - Múltiplas posições de payload (§markers§)
-  - Payload processing (URL encode, Base64, MD5, SHA256, prefix/suffix)
-  - Grep extraction (extração de dados via regex)
-  - Resource pool management (controle de threads)
-- ✅ **Scanner de Vulnerabilidades** 🔐 - Detecção automática de:
-  - **Scanner Passivo**: Detecta vulnerabilidades em respostas HTTP
-    - SQL Injection (Error-Based)
-    - XSS (Cross-Site Scripting)
-    - CSRF (Cross-Site Request Forgery)
-    - Path Traversal
-    - CVEs conhecidas
-    - Informações sensíveis expostas
-  - **Scanner Ativo**: Testa ativamente endpoints com payloads
-    - SQL Injection (Error-Based, Boolean-Based, Time-Based)
-    - XSS Refletido
-    - Command Injection
-    - Scan sob demanda em requisições selecionadas
-- ✅ **Spider/Crawler** 🕷️ - Descoberta automática de:
-  - URLs e endpoints
-  - Formulários e seus campos
-  - Estrutura do site (sitemap)
-  - Parâmetros de query strings
-- ✅ **Comparador de Requisições** 🔀 - Comparação lado a lado:
-  - Diff visual de requisições e respostas
-  - Highlighting automático de diferenças
-  - Útil para encontrar tokens CSRF e mudanças sutis
-  - Algoritmo inteligente usando difflib
-- ✅ Histórico de requisições com filtros avançados
-- ✅ Visualização detalhada de Request/Response
-- ✅ Filtros por método HTTP e regex de domínio
-- ✅ Interface de Linha de Comando (CLI) para gerenciamento de regras e execução headless
-  - ✅ Crawl automatico via CLI (HTTP ou Playwright com JS)
-  - ✅ Exportacao de historico e spider em JSON
-  - ✅ Scan passivo por ID no historico salvo
-  - ✅ **Agente Autônomo Inteligente** 🤖 - Navegação com IA (LLM):
-    - Usa Gemini, OpenAI ou Ollama para decidir ações
-    - Identifica e preenche formulários automaticamente
-    - Mapeia rotas e descobre páginas sozinho
-    - Suporta login com credenciais
-    - Sessões persistentes (pode retomar depois)
+Aplicação com interface gráfica (PySide6) organizada em abas, e uma CLI para automação.
+
+### Proxy e interceptação
+
+- Proxy HTTP/HTTPS (mitmproxy) com interceptação de requisições e respostas.
+- Regras por host/path para alterar parâmetros em GET (query string), POST (form data) e `application/json` (request/response).
+- Interceptação manual (Forward/Drop) com edição antes do envio.
+- Porta configurável e persistência de configurações em JSON.
+- Escopo (in-scope/out-of-scope) para limitar captura, scan e spider.
+
+### Histórico e análise
+
+- Histórico de requisições com filtros e visualização detalhada de Request/Response.
+- Comparador (diff lado a lado de requisições e respostas).
+- Repetição (reenviar e editar requisições).
+- Sender (CLI): envio em massa a partir de lista/arquivo, com concorrência (threads).
+
+### Ferramentas auxiliares
+
+- Decoder (Base64, URL, HTML, Hex e hashes).
+- JWT Editor (decodificar, editar, assinar e enviar para Repetição).
+- Cookie (Cookie Jar): captura e sessão forçada para Repetição/Attacker.
+- Tecnologias (detecção de tecnologias por host).
+
+### Attacker (Intruder)
+
+- Fuzzing/ataques automatizados com marcadores de payload `§...§` e controle de concorrência (threads).
+- Tipos de ataque disponíveis na interface: Sniper, Battering Ram, Pitchfork, Cluster Bomb (o suporte efetivo pode variar por versão).
+
+### Scanner de vulnerabilidades
+
+- Scanner passivo no tráfego (ex.: vazamentos, headers/cookies inseguros, padrões de SQLi/XSS/path traversal, heurísticas de CVE/CSRF).
+- Scanner ativo sob demanda com módulos (SQLi, XSS, SSTI, LFI, Open Redirect, Header Injection, IDOR, Command Injection e OAST para SSRF/RCE quando configurado).
+- Módulos ativáveis/desativáveis por configuração.
+
+### Spider/Crawler
+
+- Descoberta automática de URLs/endpoints, formulários/campos e parâmetros.
+- Integração com histórico e exportação (rotas/sitemap).
+
+### WebSocket
+
+- Monitoramento e histórico de conexões e mensagens (texto e binário).
+- Reenvio/edição ativa de mensagens WebSocket não implementados no momento (planejado).
+
+### CLI e automação com IA
+
+- CLI para executar headless, crawl (HTTP ou Playwright), exportar histórico/spider, rodar scans e gerar relatório em Markdown.
+- Agente autônomo (Playwright + LLM: Gemini/OpenAI/Ollama) para navegação e preenchimento de formulários.
+
+Detalhes por aba: ver `docs/funcionalidades.md`.
 
 ## Roadmap (Ideias de Próximas Funcionalidades)
 
-- ⏳ Sequencer 📊 - Análise de entropia em tokens/sessões
-- ⏳ Session Handler 🔄 - Macros de autenticação e auto-reautenticação (renovar tokens expirados)
-- ⏳ CORS Checker 🌐 - Teste de misconfigurações CORS
-- ⏳ GraphQL Scanner 📈 - Introspecção + fuzzing GraphQL
-- ⏳ Importador de APIs 🧩 - OpenAPI/Swagger/Postman/GraphQL para gerar endpoints e payloads
-- ⏳ Teste de Autorização 🔐 - IDOR/BOLA com comparação de respostas entre perfis
-- ⏳ Param Miner 🧭 - Hidden params, content discovery, dirs, vhosts e arquivos de backup
-- ⏳ Scanner OAST 🛰️ - SSRF/Blind XSS/XXE usando o OAST
-- ⏳ Subdomain Enumerator 🔍 - Descoberta de subdomínios
-- ⏳ WAF Detector 🛡️ - Identificação e tentativas de bypass de WAFs
-- ⏳ Notes/Report 📝 - Anotações durante o pentest + exportação de relatório
-- ⏳ Scope Manager 🎯 - Definir escopo (in-scope/out-of-scope) para filtrar tráfego
+- Sequencer: análise de entropia em tokens/sessões (planejado).
+- Session handler: macros de autenticação e auto-reautenticação (renovar tokens expirados) (planejado).
+- CORS checker: teste de misconfigurações CORS (planejado).
+- GraphQL scanner: introspecção e fuzzing GraphQL (planejado).
+- Importador de APIs: OpenAPI/Swagger/Postman/GraphQL para gerar endpoints e payloads (planejado).
+- Teste de autorização: IDOR/BOLA com comparação de respostas entre perfis (planejado).
+- Param miner: hidden params, content discovery, dirs, vhosts e arquivos de backup (planejado).
+- OAST: melhorar UX/config e cobertura (SSRF/RCE/blind) (planejado).
+- Subdomain enumerator: descoberta de subdomínios (planejado).
+- WAF detector: identificação e tentativas de bypass de WAFs (planejado).
+- Notes/Report: anotações durante o pentest e exportação de relatório (ideia).
+- Scope: UI, padrões avançados e exclusões para filtrar tráfego (planejado).
+
+## Backlog Priorizado (Melhorias Reais)
+
+### P0 (alto impacto, baixa ambiguidade)
+
+- WebSocket: reenvio de mensagens (cliente/servidor), replay e exportação do histórico por conexão; filtros e busca por payload/tipo (texto/binário).
+- Interceptação: suporte a `multipart/form-data`; regras de JSON mais robustas (paths em JSON, arrays e múltiplos matches).
+- Segurança de configuração: remover defaults sensíveis de OAST (host/api key) e exigir configuração explícita; documentar modo seguro vs modo laboratório.
+
+### P1 (médio prazo)
+
+- Importador de APIs: importar OpenAPI/Swagger e gerar coleção para Repetição/Sender/Scanner ativo.
+- Session handler: macros para renovar token, reautenticar e aplicar automaticamente em Repetição/Scanner/Attacker.
+- Teste de autorização "comparativo": rodar a mesma requisição com perfis diferentes e comparar respostas (integrado ao Comparador).
+
+### P2 (longo prazo)
+
+- Sequencer: entropia/aleatoriedade de tokens e IDs.
+- GraphQL scanner: introspecção e fuzzing de queries/mutations.
+- CORS checker: verificação automatizada de misconfigs e exploração básica.
 
 
 ## Tor (Proxy SOCKS5)
