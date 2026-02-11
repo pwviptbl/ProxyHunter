@@ -25,6 +25,7 @@ from src.core.active_scanner import ActiveScanner
 from src.core.oast_client import OASTClient
 from src.core.browser_manager import BrowserManager
 from src.core.logger_config import log
+from src.core.tor_manager import TorManager
 from src.ui.widgets.proxy_control_widget import ProxyControlWidget
 from src.ui.tabs.rules_tab import RulesTab
 from src.ui.tabs.intercept_tab import InterceptTab
@@ -347,10 +348,29 @@ class ProxyGUI(QMainWindow):
 
     def toggle_tor(self, enabled: bool):
         """Habilita/desabilita o uso do TOR."""
+        if enabled:
+            # Verifica se o TOR está rodando antes de habilitar
+            tor_port = self.config.get_tor_port()
+            tor_manager = TorManager(tor_port=tor_port)
+            if not tor_manager.is_tor_running():
+                QMessageBox.warning(
+                    self, 
+                    "Erro TOR", 
+                    f"Não foi possível conectar ao TOR na porta {tor_port}.\n\n"
+                    "Verifique se o serviço TOR está rodando e se a porta está correta."
+                )
+                # Reverte o estado do checkbox sem disparar o sinal novamente
+                self.control_widget.tor_checkbox.blockSignals(True)
+                self.control_widget.set_tor_enabled(False)
+                self.control_widget.tor_checkbox.blockSignals(False)
+                return
+
         self.config.set_tor_enabled(enabled)
         status = "habilitado" if enabled else "desabilitado"
         log.info(f"TOR {status}")
-        QMessageBox.information(self, "TOR", f"TOR {status} com sucesso!")
+        
+        if enabled:
+            QMessageBox.information(self, "TOR", f"TOR {status} com sucesso!")
 
     def launch_browser(self):
         """Abre o navegador pré-configurado."""
