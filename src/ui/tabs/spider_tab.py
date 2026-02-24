@@ -86,7 +86,7 @@ class SpiderTab(QWidget):
         # URL inicial
         config_layout.addWidget(QLabel("URL Inicial (escopo):"), 0, 0)
         self.url_entry = QLineEdit()
-        self.url_entry.setPlaceholderText("URL base para iniciar o crawling")
+        self.url_entry.setPlaceholderText("URLs base para inciar o crawling (separadas por vírgula)")
         config_layout.addWidget(self.url_entry, 0, 1)
 
         # Profundidade máxima
@@ -213,8 +213,17 @@ class SpiderTab(QWidget):
         return widget
 
     def set_initial_url(self, host: str):
-        """Define a URL inicial no campo de entrada."""
-        self.url_entry.setText(f"http://{host}")
+        """Define ou adiciona a URL inicial no campo de entrada."""
+        current_text = self.url_entry.text().strip()
+        new_url = f"http://{host}"
+        
+        if not current_text:
+            self.url_entry.setText(new_url)
+        else:
+            # Check if it's already in the list to avoid duplicates
+            urls = [u.strip() for u in current_text.split(',')]
+            if new_url not in urls:
+                self.url_entry.setText(f"{current_text}, {new_url}")
 
     def _start_spider(self):
         """Inicia o Spider."""
@@ -226,10 +235,12 @@ class SpiderTab(QWidget):
             return
 
         # Obtém configurações
-        url = self.url_entry.text().strip()
-        if not url:
-            QMessageBox.critical(self, "Erro", "Digite uma URL inicial!")
+        urls_text = self.url_entry.text().strip()
+        if not urls_text:
+            QMessageBox.critical(self, "Erro", "Digite pelo menos uma URL inicial!")
             return
+            
+        target_urls = [u.strip() for u in urls_text.split(',') if u.strip()]
 
         try:
             max_depth = int(self.depth_entry.text())
@@ -239,7 +250,7 @@ class SpiderTab(QWidget):
             return
 
         # Inicia o spider
-        self.spider.start(target_urls=[url], max_depth=max_depth, max_urls=max_urls)
+        self.spider.start(target_urls=target_urls, max_depth=max_depth, max_urls=max_urls)
 
         # Atualiza UI
         self.status_label.setText("Em Execução")
@@ -247,8 +258,8 @@ class SpiderTab(QWidget):
         self.start_button.setEnabled(False)
         self.stop_button.setEnabled(True)
 
-        log.info(f"Spider iniciado com URL: {url}")
-        #QMessageBox.information( self,  "Spider",   f"Spider iniciado!\nURL: {url}\nNavegue no site para descobrir páginas." )
+        log.info(f"Spider iniciado com URLs: {target_urls}")
+        #QMessageBox.information( self,  "Spider",   f"Spider iniciado!\nURLs: {target_urls}\nNavegue no site para descobrir páginas." )
 
     def _stop_spider(self):
         """Para o Spider."""

@@ -77,7 +77,7 @@ class AttackerWorker(QThread):
     result_added = Signal(dict)
     finished_signal = Signal()
 
-    def __init__(self, raw_request: str, attack_type: str, payloads: dict, num_threads: int, proxy_port: int, use_tor: bool = False, tor_port: int = 9050, history=None):
+    def __init__(self, raw_request: str, attack_type: str, payloads: dict, num_threads: int, proxy_port: int, use_tor: bool = False, tor_port: int = 9050, history=None, use_https: bool = False):
         super().__init__()
         self.raw_request = raw_request
         self.attack_type = attack_type
@@ -87,6 +87,7 @@ class AttackerWorker(QThread):
         self.use_tor = use_tor
         self.tor_port = tor_port
         self.history = history
+        self.use_https = use_https
         self.result_queue = queue.Queue()
 
     def run(self):
@@ -102,7 +103,8 @@ class AttackerWorker(QThread):
                 self.proxy_port,
                 self.use_tor,
                 self.tor_port,
-                self.history
+                self.history,
+                self.use_https
             )
 
             # Process results from the queue
@@ -290,6 +292,11 @@ class AttackerTab(QWidget):
         self.use_tor_checkbox = QCheckBox("Use TOR")
         self.use_tor_checkbox.setToolTip("Route requests through TOR network for anonymity")
         tor_layout.addWidget(self.use_tor_checkbox)
+        
+        self.use_https_checkbox = QCheckBox("Use HTTPS")
+        self.use_https_checkbox.setChecked(False)
+        tor_layout.addWidget(self.use_https_checkbox)
+        
         tor_layout.addStretch()
         config_layout.addLayout(tor_layout)
 
@@ -396,10 +403,11 @@ class AttackerTab(QWidget):
         num_threads = self.threads_spinbox.value()
         proxy_port = self.config.get_port()
         use_tor = self.use_tor_checkbox.isChecked()
+        use_https = self.use_https_checkbox.isChecked()
         tor_port = self.config.get_tor_port()
 
         # Create and start the worker
-        self.worker = AttackerWorker(raw_request, attack_type, payloads, num_threads, proxy_port, use_tor, tor_port, self.history)
+        self.worker = AttackerWorker(raw_request, attack_type, payloads, num_threads, proxy_port, use_tor, tor_port, self.history, use_https)
         self.worker.progress_updated.connect(self._on_progress_updated)
         self.worker.result_added.connect(self._on_result_added)
         self.worker.finished_signal.connect(self._on_worker_finished)
@@ -462,6 +470,11 @@ class AttackerTab(QWidget):
         Args:
             entry: Dictionary containing request data from history
         """
+        # Formulate logic for passing https parameter
+        url = entry.get('url', '')
+        if hasattr(self, 'use_https_checkbox'):
+            self.use_https_checkbox.setChecked(url.startswith('https://'))
+
         # Format the request
         request_info = f"{entry['method']} {entry['path']} HTTP/1.1\n"
         request_info += f"Host: {entry['host']}\n"

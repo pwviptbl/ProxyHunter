@@ -303,7 +303,8 @@ class AdvancedSender:
                  num_threads: int = 10,
                  proxy_port: int = 9507,
                  use_tor: bool = False,
-                 tor_port: int = 9050):
+                 tor_port: int = 9050,
+                 use_https: bool = False):
         """
         Args:
             raw_request: Base request with §markers§ for payload positions
@@ -315,6 +316,7 @@ class AdvancedSender:
             proxy_port: Port for the proxy server
             use_tor: Whether to route requests through TOR
             tor_port: TOR SOCKS5 port
+            use_https: Whether to use HTTPS scheme
         """
         self.raw_request = raw_request
         self.attack_type = attack_type
@@ -325,6 +327,7 @@ class AdvancedSender:
         self.proxy_port = proxy_port
         self.use_tor = use_tor
         self.tor_port = tor_port
+        self.use_https = use_https
         self.num_positions = PayloadPositionParser.count_positions(raw_request)
         
         # Store original values for Sniper attack
@@ -400,11 +403,8 @@ class AdvancedSender:
             if not host:
                 raise ValueError("Header 'Host' not found")
             
-            # Use HTTP for local hosts, HTTPS for others
-            if host.startswith(('127.0.0.1', 'localhost', '192.168.', '10.', '172.')):
-                scheme = "http"
-            else:
-                scheme = "https"
+            # Determine scheme based on use_https flag
+            scheme = "https" if self.use_https else "http"
             full_url = f"{scheme}://{host}{path}"
             
             headers_to_send = {k: v for k, v in headers.items() if k.lower() not in ['host', 'content-length']}
@@ -529,7 +529,7 @@ def _substitute_placeholder(source: str, placeholder: str, new_value: str) -> st
     """Helper to substitute a placeholder in the request body."""
     return source.replace(placeholder, str(new_value))
 
-def send_from_raw(raw_request: str, param_name: str = None, new_value: str = None, proxy_port: int = 9507, use_tor: bool = False, tor_port: int = 9050):
+def send_from_raw(raw_request: str, param_name: str = None, new_value: str = None, proxy_port: int = 9507, use_tor: bool = False, tor_port: int = 9050, use_https: bool = False):
     """
     Parses a raw HTTP request, optionally substitutes a parameter,
     and resends it, returning the response object.
@@ -560,11 +560,8 @@ def send_from_raw(raw_request: str, param_name: str = None, new_value: str = Non
         host = headers.get("Host")
         if not host:
             raise ValueError("Header 'Host' não encontrado.")
-        # Use HTTP for local hosts, HTTPS for others
-        if host.startswith(('127.0.0.1', 'localhost', '192.168.', '10.', '172.')):
-            scheme = "http"
-        else:
-            scheme = "https"
+        # Use HTTP or HTTPS based on use_https flag
+        scheme = "https" if use_https else "http"
         base_url = f"{scheme}://{host}"
 
         # 4. Substitute parameter

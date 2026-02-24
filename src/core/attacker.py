@@ -65,7 +65,7 @@ class Attacker:
     """
     Lógica principal para as operações de ataque automatizado.
     """
-    def __init__(self, raw_request: str, attack_type: str, payloads: list, num_threads: int, result_queue: queue.Queue, proxy_port: int, use_tor: bool = False, tor_port: int = 9050, history=None):
+    def __init__(self, raw_request: str, attack_type: str, payloads: list, num_threads: int, result_queue: queue.Queue, proxy_port: int, use_tor: bool = False, tor_port: int = 9050, history=None, use_https: bool = False):
         self.raw_request = raw_request
         self.attack_type = attack_type
         self.payloads = payloads
@@ -75,6 +75,7 @@ class Attacker:
         self.use_tor = use_tor
         self.tor_port = tor_port
         self.history = []
+        self.use_https = use_https
 
     def _add_to_history(self, request_text: str, response=None):
         try:
@@ -220,7 +221,8 @@ class Attacker:
                 raw_request=modified_request,
                 proxy_port=self.proxy_port,
                 use_tor=self.use_tor,
-                tor_port=self.tor_port
+                tor_port=self.tor_port,
+                use_https=self.use_https
             )
 
             # Adiciona ao histórico
@@ -232,9 +234,9 @@ class Attacker:
             log.error(f"Erro ao enviar requisição no Attacker: {e}", exc_info=True)
             return None
 
-def run_attacker(raw_request: str, attack_type: str, payloads: list, num_threads: int, result_queue: queue.Queue, proxy_port: int, use_tor: bool = False, tor_port: int = 9050, history=None):
+def run_attacker(raw_request: str, attack_type: str, payloads: list, num_threads: int, result_queue: queue.Queue, proxy_port: int, use_tor: bool = False, tor_port: int = 9050, history=None, use_https: bool = False):
     """
     Ponto de entrada para executar uma tarefa do Attacker.
     """
-    attacker = Attacker(raw_request, attack_type, payloads, num_threads, result_queue, proxy_port, use_tor, tor_port, history)
+    attacker = Attacker(raw_request, attack_type, payloads, num_threads, result_queue, proxy_port, use_tor, tor_port, history, use_https)
     attacker.run()

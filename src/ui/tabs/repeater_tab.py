@@ -11,16 +11,17 @@ class RepeaterWorker(QThread):
     """Worker para enviar requisições em uma thread separada."""
     response_received = Signal(str)
 
-    def __init__(self, raw_request: str, port: int, use_tor: bool = False, tor_port: int = 9050):
+    def __init__(self, raw_request: str, port: int, use_tor: bool = False, tor_port: int = 9050, use_https: bool = False):
         super().__init__()
         self.raw_request = raw_request
         self.port = port
         self.use_tor = use_tor
         self.tor_port = tor_port
+        self.use_https = use_https
 
     def run(self):
         """Executa o envio da requisição."""
-        response = send_from_raw(self.raw_request, None, None, self.port, self.use_tor, self.tor_port)
+        response = send_from_raw(self.raw_request, None, None, self.port, self.use_tor, self.tor_port, self.use_https)
 
         if response is not None:
             status_line = f"HTTP/1.1 {response.status_code} {response.reason}\n"
@@ -60,6 +61,10 @@ class RepeaterTab(QWidget):
         self.inject_cookies_checkbox.setChecked(True)
         config_layout.addWidget(self.inject_cookies_checkbox)
 
+        self.use_https_checkbox = QCheckBox("Use HTTPS")
+        self.use_https_checkbox.setChecked(False)
+        config_layout.addWidget(self.use_https_checkbox)
+
         config_layout.addStretch()
 
         self.send_button = QPushButton("Reenviar Requisição")
@@ -90,6 +95,11 @@ class RepeaterTab(QWidget):
 
     def set_request_data(self, entry: dict):
         self.raw_request_data = entry
+        
+        # Determine if HTTPS should be checked based on the original URL
+        url = entry.get('url', '')
+        self.use_https_checkbox.setChecked(url.startswith('https://'))
+
         headers = "\n".join(f"{k}: {v}" for k, v in entry['request_headers'].items())
         request_info = (
             f"{entry['method']} {entry['path']} HTTP/1.1\n"
@@ -114,13 +124,14 @@ class RepeaterTab(QWidget):
         port = self.config.get_port()
         use_tor = self.config.get_tor_enabled()
         tor_port = self.config.get_tor_port()
+        use_https = self.use_https_checkbox.isChecked()
 
         # Desabilita o botão para evitar cliques múltiplos
         self.send_button.setEnabled(False)
         self.response_text.setPlainText("Enviando requisição...")
 
         # Cria e inicia o worker
-        self.worker = RepeaterWorker(raw_request, port, use_tor, tor_port)
+        self.worker = RepeaterWorker(raw_request, port, use_tor, tor_port, use_https)
         self.worker.response_received.connect(self._on_response_received)
         self.worker.finished.connect(self._on_worker_finished)
         self.worker.start()
