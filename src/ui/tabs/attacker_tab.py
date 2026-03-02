@@ -18,7 +18,7 @@ class AttackerResultsModel(QAbstractTableModel):
     def __init__(self):
         super().__init__()
         self._data = []
-        self._headers = ['Payload', 'Status', 'Tamanho', 'URL']
+        self._headers = ['Payload', 'Status', 'Tamanho', 'Tempo (ms)', 'URL']
 
     def data(self, index, role):
         if role == Qt.ItemDataRole.DisplayRole:
@@ -33,6 +33,8 @@ class AttackerResultsModel(QAbstractTableModel):
                 elif col == 2:
                     return str(result.get('length', 0))
                 elif col == 3:
+                    return str(result.get('elapsed_ms', 0))
+                elif col == 4:
                     return result.get('url', 'N/A')
         elif role == Qt.ItemDataRole.ForegroundRole:
             row = index.row()
@@ -355,9 +357,10 @@ class AttackerTab(QWidget):
         self.results_model = AttackerResultsModel()
         self.results_table.setModel(self.results_model)
 
-        # Ajusta largura da coluna URL
+        # Ajusta largura das colunas
         header = self.results_table.horizontalHeader()
-        header.setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
+        header.setSectionResizeMode(4, QHeaderView.ResizeMode.Stretch)  # URL
+        self.results_table.setColumnWidth(3, 90)  # Tempo (ms)
 
         # Conecta duplo clique para abrir detalhes
         self.results_table.doubleClicked.connect(self._show_request_response_dialog)

@@ -98,8 +98,9 @@ class HistoryTab(QWidget):
 
         header = self.history_table.horizontalHeader()
         header.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
-        header.setSectionResizeMode(4, QHeaderView.ResizeMode.Stretch) # URL
-        self.history_table.setColumnWidth(1, 200) # Host - largura inicial ajustável
+        header.setSectionResizeMode(5, QHeaderView.ResizeMode.Stretch)  # URL
+        self.history_table.setColumnWidth(1, 200)  # Host
+        self.history_table.setColumnWidth(4, 90)   # Tempo (ms)
         self.history_table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.history_table.customContextMenuRequested.connect(self._show_context_menu)
 
@@ -238,8 +239,10 @@ class HistoryTab(QWidget):
             req_full = f"{entry['method']} {entry['path']} HTTP/1.1\nHost: {entry['host']}\n{req_headers}\n\n{entry['request_body']}"
             self.request_text.setPlainText(req_full)
 
+            elapsed = entry.get('elapsed_ms', None)
+            elapsed_line = f"Tempo de resposta: {elapsed} ms\n" if elapsed is not None else ""
             resp_headers = "\n".join(f"{k}: {v}" for k, v in entry['response_headers'].items())
-            resp_full = f"Status: {entry['status']}\n{resp_headers}\n\n{entry['response_body']}"
+            resp_full = f"Status: {entry['status']}\n{elapsed_line}{resp_headers}\n\n{entry['response_body']}"
             self.response_text.setPlainText(resp_full)
 
     def add_history_entry(self, entry: dict):
@@ -276,7 +279,7 @@ class HistoryTableModel(QAbstractTableModel):
     def __init__(self, data=None):
         super().__init__()
         self._data = data or []
-        self._headers = ['ID', 'Host', 'Método', 'Status', 'URL']
+        self._headers = ['ID', 'Host', 'Método', 'Status', 'Tempo (ms)', 'URL']
 
     def data(self, index, role):
         if role == Qt.ItemDataRole.DisplayRole:
@@ -286,7 +289,8 @@ class HistoryTableModel(QAbstractTableModel):
             if col == 1: return entry['host']
             if col == 2: return entry['method']
             if col == 3: return entry['status']
-            if col == 4: return entry['url']
+            if col == 4: return entry.get('elapsed_ms', '')
+            if col == 5: return entry['url']
         return None
 
     def rowCount(self, index=QModelIndex()):
@@ -383,7 +387,7 @@ class HistoryFilterProxyModel(QSortFilterProxyModel):
         method_index = self.sourceModel().index(source_row, 2, source_parent)
         domain_index = self.sourceModel().index(source_row, 1, source_parent)
         status_index = self.sourceModel().index(source_row, 3, source_parent)
-        url_index = self.sourceModel().index(source_row, 4, source_parent)
+        url_index = self.sourceModel().index(source_row, 5, source_parent)
 
         method_data = self.sourceModel().data(method_index, Qt.ItemDataRole.DisplayRole)
         domain_data = self.sourceModel().data(domain_index, Qt.ItemDataRole.DisplayRole)

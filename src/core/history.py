@@ -22,6 +22,15 @@ class RequestHistory:
             # Incrementa o ID para cada nova requisição
             self.current_id += 1
 
+            # Calcula elapsed_ms usando timestamps do mitmproxy
+            try:
+                if response and response.timestamp_end and request.timestamp_start:
+                    elapsed_ms = round((response.timestamp_end - request.timestamp_start) * 1000)
+                else:
+                    elapsed_ms = None
+            except Exception:
+                elapsed_ms = None
+
             # Extrai informações da requisição
             entry = {
                 'id': self.current_id,
@@ -31,6 +40,7 @@ class RequestHistory:
                 'url': request.pretty_url,
                 'path': request.path,
                 'status': response.status_code if response else 0,
+                'elapsed_ms': elapsed_ms,
                 'request_headers': dict(request.headers),
                 'request_body': request.content.decode('utf-8', errors='ignore') if request.content else '',
                 'response_headers': dict(response.headers) if response else {},
@@ -46,7 +56,7 @@ class RequestHistory:
 
     def add_raw_request(self, method: str, url: str, host: str, path: str, status: int,
                        request_headers: dict, request_body: str, response_headers: dict,
-                       response_body: str, vulnerabilities=None):
+                       response_body: str, vulnerabilities=None, elapsed_ms=None):
         """Adiciona uma requisição ao histórico usando dados brutos (para attacker)"""
         with self._lock:
             # Incrementa o ID para cada nova requisição
@@ -61,6 +71,7 @@ class RequestHistory:
                 'url': url,
                 'path': path,
                 'status': status,
+                'elapsed_ms': elapsed_ms,
                 'request_headers': request_headers,
                 'request_body': request_body,
                 'response_headers': response_headers,

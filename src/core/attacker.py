@@ -2,6 +2,7 @@ import re
 import queue
 import threading
 import concurrent.futures
+import time
 from datetime import datetime
 from .advanced_sender import send_from_raw # Reutilizando a função de envio
 from .logger_config import log
@@ -155,7 +156,7 @@ class Attacker:
             futures = {executor.submit(self._send_request_with_payload, p): p for p in self.payloads}
 
             for future in concurrent.futures.as_completed(futures):
-                response = future.result()
+                response, elapsed_ms = future.result()
                 payload = futures[future]
                 completed_requests += 1
 
@@ -175,6 +176,7 @@ class Attacker:
                             'url': response.request.url if hasattr(response, 'request') else '',
                             'status': response.status_code,
                             'length': len(response.content),
+                            'elapsed_ms': elapsed_ms,
                             'payload': payload,
                             'raw_request': raw_request,
                             'method': getattr(response.request, 'method', ''),
@@ -190,6 +192,7 @@ class Attacker:
                             'url': 'N/A',
                             'status': 'Error',
                             'length': 0,
+                            'elapsed_ms': 0,
                             'payload': payload,
                             'raw_request': re.sub(r'§.*?§', str(payload), self.raw_request, count=1),
                             'method': '',
@@ -210,13 +213,14 @@ class Attacker:
     def _send_request_with_payload(self, payload: str):
         """
         Prepara e envia uma única requisição HTTP com o payload injetado.
+        Retorna uma tupla (response, elapsed_ms).
         """
         try:
             # Substitui a primeira ocorrência do marcador com o payload.
-            # re.sub(pattern, repl, string, count=1)
             modified_request = re.sub(r'§.*?§', str(payload), self.raw_request, count=1)
 
-            # Reutiliza a função de envio do sender.py
+            # Mede o tempo de execução da requisição
+            t0 = time.perf_counter()
             response = send_from_raw(
                 raw_request=modified_request,
                 proxy_port=self.proxy_port,
@@ -224,15 +228,16 @@ class Attacker:
                 tor_port=self.tor_port,
                 use_https=self.use_https
             )
+            elapsed_ms = round((time.perf_counter() - t0) * 1000)
 
             # Adiciona ao histórico
             self._add_to_history(modified_request, response)
 
-            return response
+            return response, elapsed_ms
 
         except Exception as e:
             log.error(f"Erro ao enviar requisição no Attacker: {e}", exc_info=True)
-            return None
+            return None, 0
 
 def run_attacker(raw_request: str, attack_type: str, payloads: list, num_threads: int, result_queue: queue.Queue, proxy_port: int, use_tor: bool = False, tor_port: int = 9050, history=None, use_https: bool = False):
     """
