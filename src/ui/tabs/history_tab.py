@@ -59,6 +59,12 @@ class HistoryTab(QWidget):
         self.status_filter.setPlaceholderText("ex: 200,201 ou !404,!500")
         filter_layout.addWidget(self.status_filter)
 
+        # Filtro por extensão de URL
+        filter_layout.addWidget(QLabel("Ext. URL:"))
+        self.url_ext_filter = QLineEdit()
+        self.url_ext_filter.setPlaceholderText("ex: .php,.js ou !.css,!.png")
+        filter_layout.addWidget(self.url_ext_filter)
+
         # Filtro de escopo
         self.scope_filter_checkbox = QCheckBox("Apenas no escopo")
         filter_layout.addWidget(self.scope_filter_checkbox)
@@ -92,8 +98,8 @@ class HistoryTab(QWidget):
 
         header = self.history_table.horizontalHeader()
         header.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
-        header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch) # Host
         header.setSectionResizeMode(4, QHeaderView.ResizeMode.Stretch) # URL
+        self.history_table.setColumnWidth(1, 200) # Host - largura inicial ajustável
         self.history_table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.history_table.customContextMenuRequested.connect(self._show_context_menu)
 
@@ -258,12 +264,13 @@ class HistoryTab(QWidget):
             self.clear_history_requested.emit()
 
     def _apply_filters(self):
-        """Aplica os filtros de método, domínio, status e escopo na tabela."""
+        """Aplica os filtros de método, domínio, status, extensão de URL e escopo na tabela."""
         method = self.method_filter.currentText()
         domain = self.domain_filter.text().strip()
         status = self.status_filter.text().strip()
+        url_ext = self.url_ext_filter.text().strip()
         scope_only = self.scope_filter_checkbox.isChecked()
-        self.proxy_model.set_filters(method, domain, status, scope_only)
+        self.proxy_model.set_filters(method, domain, status, scope_only, url_ext)
 
 class HistoryTableModel(QAbstractTableModel):
     def __init__(self, data=None):
@@ -327,12 +334,14 @@ class HistoryFilterProxyModel(QSortFilterProxyModel):
         self.method_filter = "Todos"
         self.domain_filter = ""
         self.status_filter = ""
+        self.url_ext_filter = ""
         self.scope_only_filter = False
 
-    def set_filters(self, method: str, domain: str, status: str, scope_only: bool):
+    def set_filters(self, method: str, domain: str, status: str, scope_only: bool, url_ext: str = ""):
         self.method_filter = method
         self.domain_filter = domain
         self.status_filter = status
+        self.url_ext_filter = url_ext
         self.scope_only_filter = scope_only
         self.invalidateFilter()
 
@@ -352,6 +361,21 @@ class HistoryFilterProxyModel(QSortFilterProxyModel):
                     include.add(int(part))
                 except ValueError:
                     pass
+        return include, exclude
+
+    def parse_url_ext_filter(self, filter_str: str):
+        """Parse o filtro de extensão de URL, retornando sets de include e exclude."""
+        include = set()
+        exclude = set()
+        parts = [p.strip().lower() for p in filter_str.split(',') if p.strip()]
+        for part in parts:
+            if part.startswith('!'):
+                ext = part[1:]
+                if ext:
+                    exclude.add(ext)
+            else:
+                if part:
+                    include.add(part)
         return include, exclude
 
     def filterAcceptsRow(self, source_row, source_parent):
@@ -383,9 +407,21 @@ class HistoryFilterProxyModel(QSortFilterProxyModel):
         else:
             status_match = True
 
+        # Filtro de extensão de URL
+        url_str = str(url_data or "").lower()
+        # Pega apenas o caminho antes de '?' para checar extensão
+        url_path = url_str.split('?')[0]
+        url_include, url_exclude = self.parse_url_ext_filter(self.url_ext_filter)
+        if url_include:
+            url_ext_match = any(url_path.endswith(ext) for ext in url_include)
+        elif url_exclude:
+            url_ext_match = not any(url_path.endswith(ext) for ext in url_exclude)
+        else:
+            url_ext_match = True
+
         # Filtro de escopo
         scope_match = True
         if self.scope_only_filter:
             scope_match = self.config.is_in_scope(url_data)
 
-        return method_match and domain_match and status_match and scope_match
+        return method_match and domain_match and status_match and url_ext_match and scope_match
