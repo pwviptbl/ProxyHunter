@@ -104,16 +104,18 @@ class BrowserManager:
             print("[DEBUG] Playwright: playwright iniciado.")
             print("[DEBUG] Playwright: lançando chromium...")
             screen_width, screen_height = self._get_screen_dimensions()
-            print(f"[DEBUG] Screen dimensions detected: {screen_width}x{screen_height}")
+            print(f"[DEBUG] Screen dimensions: {screen_width}x{screen_height}")
 
-            # Define margens dinâmicas para evitar que a janela ultrapasse os limites da tela.
-            margin_w = min(120, max(40, int(screen_width * 0.05)))
-            margin_h = min(160, max(60, int(screen_height * 0.07)))
-            safe_width = max(screen_width - margin_w, min(1024, screen_width))
-            safe_height = max(screen_height - margin_h, min(720, screen_height))
+            # Desconta o chrome do browser da altura do viewport:
+            #   taskbar Linux: ~40px, tab bar: ~36px, URL bar: ~46px, bookmarks bar: ~36px = ~158px
+            # Sem esse desconto o conteúdo vaza para baixo da janela sem scroll.
+            viewport_w = screen_width
+            viewport_h = max(600, screen_height - 160)
+            print(f"[DEBUG] Viewport calculado: {viewport_w}x{viewport_h}")
+
             launch_args = [
-                f"--window-size={safe_width},{safe_height}",
-                "--start-maximized",
+                f"--window-size={screen_width},{screen_height}",
+                "--window-position=0,0",
                 "--ignore-certificate-errors"
             ]
 
@@ -124,24 +126,23 @@ class BrowserManager:
             )
             print("[DEBUG] Playwright: chromium lançado.")
 
-            print("[DEBUG] Playwright: criando novo contexto...")
-            # Ajusta o viewport para acompanhar o tamanho definido para a janela.
-            context = await self.browser.new_context(viewport={'width': safe_width, 'height': safe_height})
-            print("[DEBUG] Playwright: novo contexto criado.")
+            context = await self.browser.new_context(
+                viewport={'width': viewport_w, 'height': viewport_h}
+            )
 
-            print("[DEBUG] Playwright: criando nova página...")
             self.page = await context.new_page()
-            print("[DEBUG] Playwright: nova página criada.")
-            print("[DEBUG] Playwright: navegando para google.com...")
-            #await self.page.goto("https://www.google.com")
-            await self.page.goto("http://127.0.0.1")  # Página de teste local
+            await self.page.goto("http://127.0.0.1")
             print("[DEBUG] Playwright: navegação concluída.")
-            # Garante que o navegador seja fechado quando a página for fechada pelo usuário
+
             self.page.on("close", self.close_browser_sync)
-            print("[DEBUG] Playwright: handler de fechamento registrado.")
+            print("[DEBUG] Playwright: pronto.")
+
+
         except Exception as e:
             print(f"[ERRO] Falha ao abrir o navegador: {e}")
             traceback.print_exc()
+
+
 
 
     def launch_browser(self):
