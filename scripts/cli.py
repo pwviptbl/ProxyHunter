@@ -740,8 +740,8 @@ def agent_navigate(url, objective, username, password, headful):
     # Resolve modelo do config
     model = ai_config.get("model")
     if not model:
-        defaults = {"gemini": "gemini-2.0-flash", "openai": "gpt-4", "ollama": "llama3"}
-        model = defaults.get(provider, "gemini-2.0-flash")
+        defaults = {"gemini": "gemini-2.5-flash-lite", "openai": "gpt-4", "ollama": "llama3"}
+        model = defaults.get(provider, "gemini-2.5-flash-lite")
     
     # Resolve configurações do agente
     max_steps = ai_config.get("max_steps", 50)

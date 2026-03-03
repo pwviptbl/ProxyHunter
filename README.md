@@ -357,7 +357,7 @@ O agente autônomo usa **IA (LLM)** para navegar em sites como um humano faria -
 {
     "provider": "gemini",
     "api_key": "YOUR_API_KEY",
-    "model": "gemini-2.0-flash",
+    "model": "gemini-2.5-flash-lite",
     "max_steps": 50
 }
 ```

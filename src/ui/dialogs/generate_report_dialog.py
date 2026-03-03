@@ -12,12 +12,19 @@ class GenerateReportDialog(QDialog):
 
         layout = QVBoxLayout(self)
 
+        # Label informativo
+        info_label = QLabel("Deixe os campos em branco para incluir todos os dados do histórico.")
+        info_label.setStyleSheet("color: gray; font-style: italic;")
+        layout.addWidget(info_label)
+
         # Filtros
         form_layout = QFormLayout()
 
         self.domain_filter = QLineEdit()
         if scope_hosts:
-            self.domain_filter.setText(", ".join(scope_hosts))
+            # Usa os hosts do escopo apenas como sugestão (placeholder), não como valor obrigatório.
+            # Pré-preencher bloquearia entradas de hosts fora do escopo (ex: scans ativos).
+            self.domain_filter.setPlaceholderText(", ".join(scope_hosts))
         else:
             self.domain_filter.setPlaceholderText("Ex: *.example.com, site.com")
         form_layout.addRow("Filtro de Domínio:", self.domain_filter)

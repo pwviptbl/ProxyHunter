@@ -21,7 +21,7 @@ class LLMConfig:
     
     provider: str = "gemini"  # gemini, openai, ollama
     api_key: str = ""
-    model: str = "gemini-2.0-flash"
+    model: str = "gemini-2.5-flash-lite"
     temperature: float = 0.3
     max_tokens: int = 1024
     timeout: int = 30

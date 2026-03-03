@@ -659,29 +659,34 @@ class ProxyGUI(QMainWindow):
         from urllib.parse import urlparse
         import fnmatch
 
-        domain_pattern = filters.get('domain')
+        domain_raw = filters.get('domain', '').strip()
+        # Suporta múltiplos domínios separados por vírgula (ex: quando o escopo
+        # tem mais de um host e o diálogo os preenche como "host1, host2")
+        domain_patterns = [p.strip() for p in domain_raw.split(',') if p.strip()] if domain_raw else []
+
         status_patterns = filters.get('status_code', '').replace('x', '*').split(',')
         methods = filters.get('methods', [])
 
         filtered_entries = []
         for entry in history:
-            # 1. Filtro de Método
-            if entry['method'] not in methods:
+            # 1. Filtro de Método (se a lista estiver vazia, aceita qualquer método)
+            entry_method = entry.get('method', '')
+            if methods and entry_method not in methods:
                 continue
 
-            # 2. Filtro de Domínio
-            if domain_pattern:
-                hostname = urlparse(entry['url']).hostname
-                if not hostname or not fnmatch.fnmatch(hostname, domain_pattern.strip()):
+            # 2. Filtro de Domínio (se não houver padrões, aceita qualquer domínio)
+            if domain_patterns:
+                hostname = urlparse(entry.get('url', '')).hostname or ''
+                if not any(fnmatch.fnmatch(hostname, pat) for pat in domain_patterns):
                     continue
 
             # 3. Filtro de Status Code
             status_match = False
             if not any(p.strip() for p in status_patterns):
-                 status_match = True # Se o filtro de status estiver vazio, corresponde a tudo
+                status_match = True  # Filtro vazio → aceita tudo
             else:
                 for pattern in status_patterns:
-                    if fnmatch.fnmatch(str(entry['status']), pattern.strip()):
+                    if fnmatch.fnmatch(str(entry.get('status', '')), pattern.strip()):
                         status_match = True
                         break
 

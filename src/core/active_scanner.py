@@ -33,7 +33,8 @@ class ActiveScanner:
         use_tor: bool = False,
         tor_port: int = 9050,
         oast_client: Optional[OASTClient] = None,
-        enabled_modules: Optional[Union[Dict[str, bool], Iterable[str]]] = None
+        enabled_modules: Optional[Union[Dict[str, bool], Iterable[str]]] = None,
+        log_callback=None
     ):
         self.session = requests.Session()
         self.session.verify = False
@@ -45,6 +46,7 @@ class ActiveScanner:
         if self.oast_client and self.oast_client.is_available():
             self.oast_available = True
         self.enabled_modules = enabled_modules
+        self.log_callback = log_callback  # callback(msg: str) chamado para cada teste
         self.scan_modules = self._load_scan_modules()
         self._logs_dir = None
         self.sql_error_patterns = [
@@ -109,6 +111,54 @@ class ActiveScanner:
         except Exception:
             return payload
 
+    def _emit_log(self, msg: str):
+        """Emite uma mensagem de log para a UI (se callback configurado) e para o logger."""
+        log.info(msg)
+        if self.log_callback:
+            try:
+                self.log_callback(msg)
+            except Exception:
+                pass
+
+    def _parse_multipart_body(self, body: str, boundary: str) -> Dict[str, str]:
+        """Extrai campos de texto de um body multipart/form-data.
+        Ignora partes com filename= (uploads de arquivo).
+        Retorna dict {nome: valor}.
+        """
+        fields = {}
+        if not body or not boundary:
+            return fields
+        # Normaliza o boundary (remove espaços extras)
+        boundary = boundary.strip()
+        # Divide o body pelas partes
+        delimiter = f'--{boundary}'
+        parts = body.split(delimiter)
+        for part in parts:
+            # Pula partes vazias ou o terminador final '--'
+            if not part or part.strip() in ('', '--', '--\r\n', '--\n'):
+                continue
+            # Separa headers da parte do corpo
+            if '\r\n\r\n' in part:
+                headers_block, value = part.split('\r\n\r\n', 1)
+            elif '\n\n' in part:
+                headers_block, value = part.split('\n\n', 1)
+            else:
+                continue
+            # Ignora partes com filename (upload de arquivo)
+            if 'filename=' in headers_block.lower():
+                continue
+            # Extrai o nome do campo
+            name_match = re.search(r'name="([^"]+)"', headers_block, re.IGNORECASE)
+            if not name_match:
+                name_match = re.search(r"name='([^']+)'", headers_block, re.IGNORECASE)
+            if not name_match:
+                continue
+            name = name_match.group(1)
+            # Limpa o valor (remove \r\n ou -- finais)
+            value = value.rstrip('\r\n').rstrip('-')
+            fields[name] = value
+        return fields
+
     def _should_skip_param(self, name: str) -> bool:
         if not name:
             return True
@@ -167,14 +217,28 @@ class ActiveScanner:
             for value in values:
                 if not self._should_skip_param(name):
                     points.append({'type': 'url', 'name': name, 'value': value})
+
         headers = {k.lower(): v for k, v in request.get('headers', {}).items()}
-        if 'content-type' in headers and 'application/x-www-form-urlencoded' in headers['content-type']:
+        content_type = headers.get('content-type', '')
+
+        if 'application/x-www-form-urlencoded' in content_type:
             if request.get('body'):
                 body_params = parse_qs(request['body'])
                 for name, values in body_params.items():
                     for value in values:
                         if not self._should_skip_param(name):
                             points.append({'type': 'body', 'name': name, 'value': value})
+
+        elif 'multipart/form-data' in content_type:
+            # Extrai o boundary do Content-Type
+            boundary_match = re.search(r'boundary=([^;\s]+)', content_type, re.IGNORECASE)
+            if boundary_match and request.get('body'):
+                boundary = boundary_match.group(1).strip('"')
+                fields = self._parse_multipart_body(request['body'], boundary)
+                for name, value in fields.items():
+                    if not self._should_skip_param(name):
+                        points.append({'type': 'body', 'name': name, 'value': value})
+
         log.debug(f"Pontos de inserção encontrados: {len(points)}")
         return points
 
@@ -294,6 +358,21 @@ class ActiveScanner:
                     })
                     point_id += 1
 
+        elif 'multipart/form-data' in (content_type or '') and body_text:
+            boundary_match = re.search(r'boundary=([^;\s]+)', content_type, re.IGNORECASE)
+            if boundary_match:
+                boundary = boundary_match.group(1).strip('"')
+                fields = self._parse_multipart_body(body_text, boundary)
+                for name, value in fields.items():
+                    if not self._should_skip_param(name):
+                        points.append({
+                            'id': point_id,
+                            'location': 'BODY_FORM',
+                            'parameter_name': name,
+                            'original_value': value,
+                        })
+                        point_id += 1
+
         if 'application/json' in (content_type or '') and body_text:
             try:
                 json_body = json.loads(body_text)
@@ -368,7 +447,8 @@ class ActiveScanner:
         for point in injection_points:
             for module in self.scan_modules:
                 try:
-                    log.info(f"ScanAtivo - {module.__class__.__name__} (param: {point.get('parameter_name')})")
+                    msg = f"[Módulo] {module.__class__.__name__} → param: {point.get('parameter_name')} (location: {point.get('location')})"
+                    self._emit_log(msg)
                     vulns = module.run_test(request_node, point, self.oast_client)
                     for vuln in vulns:
                         results.append(self._module_vuln_to_dict(vuln, base_request))
@@ -1197,17 +1277,21 @@ class ActiveScanner:
             vulnerabilities.append(info_vuln)
 
         for point in insertion_points:
-            log.info(f"--- SCANNER DEBUG: Testando ponto de inserção: {point}")
-            log.info(f"ScanAtivo - SQLi (param: {point.get('name')})")
+            param_name = point.get('name')
+            self._emit_log(f"▶ Ponto de inserção: '{param_name}' (type={point.get('type')}, value={repr(str(point.get('value', ''))[:40])})")
+            self._emit_log(f"  [SQLi Login Bypass] → '{param_name}'")
             vulnerabilities.extend(self._check_login_sqli(base_request, point))
+            self._emit_log(f"  [SQLi Error/Union/Stacked] → '{param_name}'")
             vulnerabilities.extend(self._check_sql_injection(base_request, point))
+            self._emit_log(f"  [SQLi Boolean-Based] → '{param_name}'")
             vulnerabilities.extend(self._check_boolean_sqli(base_request, point))
+            self._emit_log(f"  [SQLi Time-Based] → '{param_name}'")
             vulnerabilities.extend(self._check_time_based_sqli(base_request, point))
-            log.info(f"ScanAtivo - Command Injection (param: {point.get('name')})")
+            self._emit_log(f"  [Command Injection] → '{param_name}'")
             vulnerabilities.extend(self._check_command_injection(base_request, point))
-            log.info(f"ScanAtivo - XSS (param: {point.get('name')})")
+            self._emit_log(f"  [XSS] → '{param_name}'")
             vulnerabilities.extend(self._check_xss(base_request, point))
-            log.info(f"ScanAtivo - Path Traversal (param: {point.get('name')})")
+            self._emit_log(f"  [Path Traversal] → '{param_name}'")
             vulnerabilities.extend(self._check_path_traversal(base_request, point))
 
         module_vulnerabilities = self._run_scan_modules(base_request)

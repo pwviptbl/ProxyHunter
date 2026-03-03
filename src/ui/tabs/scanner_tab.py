@@ -1,7 +1,7 @@
 from PySide6.QtCore import Qt, Signal, QAbstractTableModel, QModelIndex, QSortFilterProxyModel, QThread
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QPushButton, QLabel, QComboBox,
                                QGroupBox, QHBoxLayout, QTableView, QAbstractItemView,
-                               QTextEdit, QSplitter, QHeaderView, QMessageBox, QLineEdit)
+                               QTextEdit, QTabWidget, QSplitter, QHeaderView, QMessageBox, QLineEdit)
 from PySide6.QtGui import QBrush, QColor
 
 from src.core.history import RequestHistory
@@ -12,6 +12,7 @@ from src.core.logger_config import log
 class ScanWorker(QThread):
     """Worker thread to run the active scan without freezing the UI."""
     scan_complete = Signal(dict, list)
+    scan_log_message = Signal(str)  # Emite mensagens de log para a UI em tempo real
 
     def __init__(self, scanner: ActiveScanner, request_data: dict):
         super().__init__()
@@ -21,9 +22,13 @@ class ScanWorker(QThread):
     def run(self):
         """Executa o scan ativo e emite o resultado."""
         try:
+            # Configura o callback de log antes de iniciar o scan
+            self.scanner.log_callback = lambda msg: self.scan_log_message.emit(msg)
             results = self.scanner.scan_request(self.request_data)
+            self.scanner.log_callback = None
             self.scan_complete.emit(self.request_data, results)
         except Exception as e:
+            self.scanner.log_callback = None
             log.error(f"Erro durante a execução do ScanWorker: {e}")
             # Cria uma vulnerabilidade para reportar o erro na UI
             error_vuln = {
@@ -63,6 +68,13 @@ class ScannerTab(QWidget):
 
         self.count_label = QLabel("Total: 0 vulnerabilidade(s)")
         layout.addWidget(self.count_label)
+
+    def _append_scan_log(self, msg: str):
+        """Slot thread-safe para adicionar mensagem ao painel de log de testes."""
+        self.scan_log_text.append(msg)
+        # Rola automaticamente para o final
+        sb = self.scan_log_text.verticalScrollBar()
+        sb.setValue(sb.maximum())
 
     def _setup_info_section(self, layout):
         info_group = QGroupBox("Scanner de Vulnerabilidades")
@@ -148,11 +160,26 @@ class ScannerTab(QWidget):
         parent.addWidget(table_group)
 
     def _setup_details_panel(self, parent):
-        details_group = QGroupBox("Detalhes da Vulnerabilidade")
+        details_group = QGroupBox("Detalhes")
         details_layout = QVBoxLayout()
+
+        self.details_tabs_widget = QTabWidget()
+
+        # Aba de detalhes da vulnerabilidade
         self.details_text = QTextEdit()
         self.details_text.setReadOnly(True)
-        details_layout.addWidget(self.details_text)
+        self.details_tabs_widget.addTab(self.details_text, "🔍 Vulnerabilidade")
+
+        # Aba de log de testes em tempo real
+        self.scan_log_text = QTextEdit()
+        self.scan_log_text.setReadOnly(True)
+        self.scan_log_text.setFontFamily("Monospace")
+        self.scan_log_text.setStyleSheet(
+            "QTextEdit { background-color: #1e1e1e; color: #d4d4d4; font-size: 11px; }"
+        )
+        self.details_tabs_widget.addTab(self.scan_log_text, "📋 Log de Testes")
+
+        details_layout.addWidget(self.details_tabs_widget)
         details_group.setLayout(details_layout)
         parent.addWidget(details_group)
 
@@ -182,8 +209,15 @@ class ScannerTab(QWidget):
 
     def _start_scan(self, request_data_for_scanner: dict):
         self.set_active_scan_status(f"Escaneando {request_data_for_scanner['url']}...", "blue")
+        # Limpa o log de testes e muda para a aba de log automaticamente
+        self.scan_log_text.clear()
+        url = request_data_for_scanner.get('url', '')
+        method = request_data_for_scanner.get('method', '')
+        self.scan_log_text.append(f"=== Iniciando scan: {method} {url} ===")
+        self.details_tabs_widget.setCurrentIndex(1)  # Muda para aba "Log de Testes"
         self.scan_worker = ScanWorker(self.active_scanner, request_data_for_scanner)
         self.scan_worker.scan_complete.connect(self._on_scan_complete)
+        self.scan_worker.scan_log_message.connect(self._append_scan_log)
         self.scan_worker.finished.connect(lambda: self.set_active_scan_status("Scan finalizado.", "green"))
         self.scan_worker.finished.connect(self._on_scan_worker_finished)
         self.scan_worker.start()
@@ -204,8 +238,10 @@ class ScannerTab(QWidget):
 
     def _on_scan_complete(self, request_data: dict, vulnerabilities: list):
         if not vulnerabilities:
+            self._append_scan_log("\n✅ Nenhuma vulnerabilidade encontrada.")
             log.info(f"Nenhuma vulnerabilidade encontrada para {request_data['url']}")
             return
+        self._append_scan_log(f"\n🚨 {len(vulnerabilities)} vulnerabilidade(s) encontrada(s)!")
         log.info(f"{len(vulnerabilities)} novas vulnerabilidades ativas encontradas para {request_data['id']}. Atualizando UI.")
         self.history_manager.add_vulnerabilities_to_entry(request_data['id'], vulnerabilities)
         self.refresh_vulnerabilities()
