@@ -97,6 +97,16 @@ class InterceptAddon:
             return True
         return request_host_no_port.endswith(f".{rule_host_no_port}")
 
+    @staticmethod
+    def _parse_json_value(value: str):
+        """Tenta converter uma string para um tipo primitivo ou objeto JSON."""
+        try:
+            import json
+            return json.loads(value)
+        except:
+            # Se não for JSON válido (ex: uma string simples sem aspas), retorna como está
+            return value
+
     def request(self, flow: http.HTTPFlow) -> None:
         """Intercepta requisições HTTP"""
         # Força upstream HTTP para servidores locais que não suportam TLS
@@ -154,7 +164,7 @@ class InterceptAddon:
         request = flow.request
 
         for rule in self.config.get_rules():
-            if not rule.get('enabled', True):
+            if not rule.get('enabled', True) or rule.get('type', 'request') != 'request':
                 continue
 
             # Verifica se a URL corresponde ao host e caminho configurados
@@ -166,17 +176,15 @@ class InterceptAddon:
             path_match = True if not normalized_rule_path else request.path.startswith(normalized_rule_path)
 
             if host_match and path_match:
-                # Modifica parâmetros na query string (GET)
-                if request.query:
-                    query_dict = dict(request.query)
-                    if rule['param_name'] in query_dict:
-                        query_dict[rule['param_name']] = rule['param_value']
-                        request.query.clear()
-                        for key, value in query_dict.items():
-                            request.query[key] = value
-                        log.info(f"Regra GET aplicada: '{rule['param_name']}' -> '{rule['param_value']}' em {request.pretty_url}")
+                # Modifica ou adiciona parâmetros na query string (GET)
+                query_dict = dict(request.query)
+                query_dict[rule['param_name']] = rule['param_value']
+                request.query.clear()
+                for key, value in query_dict.items():
+                    request.query[key] = value
+                log.info(f"Regra GET aplicada: '{rule['param_name']}' -> '{rule['param_value']}' em {request.pretty_url}")
 
-                # Modifica parâmetros no corpo (POST)
+                # Modifica ou adiciona parâmetros no corpo (POST)
                 if request.method == "POST" and request.content:
                     content_type = request.headers.get("content-type", "")
 
@@ -185,13 +193,12 @@ class InterceptAddon:
                         body = request.content.decode('utf-8', errors='ignore')
                         params = parse_qs(body, keep_blank_values=True)
 
-                        # Modifica o parâmetro se existir
-                        if rule['param_name'] in params:
-                            params[rule['param_name']] = [rule['param_value']]
-                            # Reconstrói o corpo
-                            new_body = urlencode(params, doseq=True)
-                            request.content = new_body.encode('utf-8')
-                            log.info(f"Regra POST aplicada: '{rule['param_name']}' -> '{rule['param_value']}' em {request.pretty_url}")
+                        # Modifica ou adiciona o parâmetro
+                        params[rule['param_name']] = [rule['param_value']]
+                        # Reconstrói o corpo
+                        new_body = urlencode(params, doseq=True)
+                        request.content = new_body.encode('utf-8')
+                        log.info(f"Regra POST aplicada: '{rule['param_name']}' -> '{rule['param_value']}' em {request.pretty_url}")
 
                     elif "multipart/form-data" in content_type:
                         # Para dados multipart/form-data
@@ -234,10 +241,12 @@ class InterceptAddon:
                                         obj = obj.setdefault(key, {})
                                     obj[keys[-1]] = value
                                 
-                                set_nested_value(body, rule['param_name'], rule['param_value'])
+                                # Converte o valor para o tipo JSON correto (ex: "false" -> False booleano)
+                                parsed_value = self._parse_json_value(rule['param_value'])
+                                set_nested_value(body, rule['param_name'], parsed_value)
                                 new_body = json.dumps(body)
                                 request.content = new_body.encode('utf-8')
-                                log.info(f"Regra POST aplicada (JSON): '{rule['param_name']}' -> '{rule['param_value']}' em {request.pretty_url}")
+                                log.info(f"Regra POST aplicada (JSON): '{rule['param_name']}' -> {parsed_value} ({type(parsed_value).__name__}) em {request.pretty_url}")
                         except Exception as e:
                             log.error(f"Erro ao processar application/json em {request.pretty_url}: {e}")
 
@@ -274,10 +283,12 @@ class InterceptAddon:
                                         obj = obj.setdefault(key, {})
                                     obj[keys[-1]] = value
                                 
-                                set_nested_value(body, rule['param_name'], rule['param_value'])
+                                # Converte o valor para o tipo JSON correto (ex: "false" -> False booleano)
+                                parsed_value = self._parse_json_value(rule['param_value'])
+                                set_nested_value(body, rule['param_name'], parsed_value)
                                 new_body = json.dumps(body)
                                 flow.response.content = new_body.encode('utf-8')
-                                log.info(f"Regra RESPONSE aplicada (JSON): '{rule['param_name']}' -> '{rule['param_value']}' em {flow.request.pretty_url}")
+                                log.info(f"Regra RESPONSE aplicada (JSON): '{rule['param_name']}' -> {parsed_value} ({type(parsed_value).__name__}) em {flow.request.pretty_url}")
                         except Exception as e:
                             log.error(f"Erro ao processar response JSON em {flow.request.pretty_url}: {e}")
         
