@@ -89,10 +89,10 @@ class ProxyGUI(QMainWindow):
         self.proxy_master = None
         self.proxy_loop = None
         self.ui_queue = queue.Queue()
-        # Registra a fila de UI na configuração para que o addon possa enviar notificações
+        # Registra a fila de UI nos gerenciadores para que possam enviar notificações de outras threads
         self.config.set_ui_queue(self.ui_queue)
+        self.history.set_ui_queue(self.ui_queue)
         self.websocket_history.set_ui_queue(self.ui_queue)
-        # Também registra a fila no Spider para atualizações de estatísticas
         self.spider.set_ui_queue(self.ui_queue)
 
         self.setWindowTitle("ProxyHunter")
@@ -290,7 +290,8 @@ class ProxyGUI(QMainWindow):
 
                     addon = InterceptAddon(
                         self.config, self.history, self.cookie_manager,
-                        self.spider, self.websocket_history, self.technology_manager
+                        self.spider, self.websocket_history, self.technology_manager,
+                        active_scanner=self.active_scanner
                     )
                     master.addons.add(addon)
 
@@ -439,8 +440,9 @@ class ProxyGUI(QMainWindow):
         data = message.get("data")
 
         if msg_type == "new_history_entry":
+            # Adiciona ao histórico thread-safely na thread principal
             self.history_tab.add_history_entry(data)
-            # Atualiza a lista de vulnerabilidades se houver vulnerabilidades detectadas
+            # Atualiza a lista de vulnerabilidades se houver vulnerabilidades detectadas (passivas)
             if data.get('vulnerabilities'):
                 self.scanner_tab.refresh_vulnerabilities()
         elif msg_type == "intercepted_request":
@@ -450,9 +452,11 @@ class ProxyGUI(QMainWindow):
             if hasattr(self, 'spider_tab'):
                 self.spider_tab.apply_stats(data)
         elif msg_type == "update_websocket_list":
-            # WebSocket tab has auto-refresh timer, but we can also manually trigger update
             if hasattr(self, 'websocket_tab'):
                 self.websocket_tab._update_websocket_list()
+        elif msg_type == "refresh_vulnerabilities":
+            # Sinal explícito para atualizar vulnerabilidades (ex: após scan ativo)
+            self.scanner_tab.refresh_vulnerabilities()
 
     # --- Lógica da Aba de Interceptação ---
     def toggle_intercept(self):

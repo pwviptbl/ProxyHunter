@@ -38,7 +38,9 @@ def parse_env_flag(name, default=False):
 
 def is_safe_mode():
     """Enable safe mode to avoid unstable splash/GL paths."""
-    return parse_env_flag("PROXYHUNTER_SAFE_MODE", default=False)
+    # Default to safe mode on Linux unless explicitly disabled
+    default_safe = sys.platform in ("linux", "linux2")
+    return parse_env_flag("PROXYHUNTER_SAFE_MODE", default=default_safe)
 
 if is_safe_mode():
     os.environ.setdefault("QT_OPENGL", "software")

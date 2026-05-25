@@ -1,7 +1,9 @@
 import re
+import json
 from PySide6.QtCore import Qt, Signal, QThread
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QPushButton, QLabel, QLineEdit,
-                               QGroupBox, QHBoxLayout, QTextEdit, QSplitter, QMessageBox, QCheckBox)
+                               QGroupBox, QHBoxLayout, QTextEdit, QSplitter, QMessageBox, QCheckBox,
+                               QTabWidget)
 
 from src.core.advanced_sender import send_from_raw
 from src.core.config import InterceptConfig
@@ -9,7 +11,7 @@ from src.core.cookie_manager import CookieManager
 
 class RepeaterWorker(QThread):
     """Worker para enviar requisições em uma thread separada."""
-    response_received = Signal(str)
+    response_received = Signal(dict)
 
     def __init__(self, raw_request: str, port: int, use_tor: bool = False, tor_port: int = 9050, use_https: bool = False):
         super().__init__()
@@ -21,16 +23,27 @@ class RepeaterWorker(QThread):
 
     def run(self):
         """Executa o envio da requisição."""
-        response = send_from_raw(self.raw_request, None, None, self.port, self.use_tor, self.tor_port, self.use_https)
+        try:
+            response = send_from_raw(self.raw_request, None, None, self.port, self.use_tor, self.tor_port, self.use_https)
 
-        if response is not None:
-            status_line = f"HTTP/1.1 {response.status_code} {response.reason}\n"
-            headers = "\n".join(f"{k}: {v}" for k, v in response.headers.items())
-            body = response.text
-            full_response = f"{status_line}{headers}\n\n{body}"
-            self.response_received.emit(full_response)
-        else:
-            self.response_received.emit("Erro: A requisição falhou. Verifique os logs.")
+            if response is not None:
+                status_line = f"HTTP/1.1 {response.status_code} {response.reason}\n"
+                headers_dict = dict(response.headers)
+                headers_str = "\n".join(f"{k}: {v}" for k, v in headers_dict.items())
+                body = response.text
+                full_response = f"{status_line}{headers_str}\n\n{body}"
+                
+                self.response_received.emit({
+                    'full_text': full_response,
+                    'status_code': response.status_code,
+                    'headers': headers_dict,
+                    'body': body,
+                    'content_type': response.headers.get('Content-Type', '')
+                })
+            else:
+                self.response_received.emit({'error': "Erro: A requisição falhou. Verifique os logs."})
+        except Exception as e:
+            self.response_received.emit({'error': f"Erro: {str(e)}"})
 
 class RepeaterTab(QWidget):
     """Aba de UI para reenviar e modificar requisições manualmente."""
@@ -86,10 +99,27 @@ class RepeaterTab(QWidget):
     def _setup_response_panel(self, parent):
         response_group = QGroupBox("Response")
         response_layout = QVBoxLayout()
-        self.response_text = QTextEdit()
-        self.response_text.setFontFamily("Courier")
-        self.response_text.setReadOnly(True)
-        response_layout.addWidget(self.response_text)
+        
+        self.response_tabs = QTabWidget()
+        
+        # Tab 1: Raw
+        self.response_text_raw = QTextEdit()
+        self.response_text_raw.setFontFamily("Courier")
+        self.response_text_raw.setReadOnly(True)
+        self.response_tabs.addTab(self.response_text_raw, "Raw")
+        
+        # Tab 2: Pretty (Formatted JSON/HTML)
+        self.response_text_pretty = QTextEdit()
+        self.response_text_pretty.setFontFamily("Courier")
+        self.response_text_pretty.setReadOnly(True)
+        self.response_tabs.addTab(self.response_text_pretty, "Pretty")
+        
+        # Tab 3: Render (HTML)
+        self.response_render = QTextEdit()
+        self.response_render.setReadOnly(True)
+        self.response_tabs.addTab(self.response_render, "Render")
+        
+        response_layout.addWidget(self.response_tabs)
         response_group.setLayout(response_layout)
         parent.addWidget(response_group)
 
@@ -109,7 +139,9 @@ class RepeaterTab(QWidget):
         if entry['request_body']:
             request_info += f"\n\n{entry['request_body']}"
         self.request_text.setPlainText(request_info)
-        self.response_text.clear()
+        self.response_text_raw.clear()
+        self.response_text_pretty.clear()
+        self.response_render.clear()
 
     def _send_request(self):
         raw_request = self.request_text.toPlainText()
@@ -128,7 +160,9 @@ class RepeaterTab(QWidget):
 
         # Desabilita o botão para evitar cliques múltiplos
         self.send_button.setEnabled(False)
-        self.response_text.setPlainText("Enviando requisição...")
+        self.response_text_raw.setPlainText("Enviando requisição...")
+        self.response_text_pretty.clear()
+        self.response_render.clear()
 
         # Cria e inicia o worker
         self.worker = RepeaterWorker(raw_request, port, use_tor, tor_port, use_https)
@@ -164,8 +198,34 @@ class RepeaterTab(QWidget):
 
         return new_request
 
-    def _on_response_received(self, response_text: str):
-        self.response_text.setPlainText(response_text)
+    def _on_response_received(self, data: dict):
+        if 'error' in data:
+            self.response_text_raw.setPlainText(data['error'])
+            return
+
+        body = data.get('body', '')
+        content_type = data.get('content_type', '').lower()
+
+        # 1. Raw View
+        self.response_text_raw.setPlainText(data.get('full_text', ''))
+
+        # 2. Pretty View
+        pretty_body = body
+        if 'application/json' in content_type:
+            try:
+                parsed = json.loads(body)
+                pretty_body = json.dumps(parsed, indent=4, ensure_ascii=False)
+            except:
+                pass
+        self.response_text_pretty.setPlainText(pretty_body)
+
+        # 3. Render View (HTML)
+        if 'text/html' in content_type or '<html' in body.lower() or '<pre' in body.lower():
+            self.response_render.setHtml(body)
+            self.response_tabs.setTabEnabled(2, True)
+        else:
+            self.response_render.clear()
+            # self.response_tabs.setTabEnabled(2, False) # Opcional: desabilitar se não for HTML
 
     def _on_worker_finished(self):
         self.send_button.setEnabled(True)

@@ -19,34 +19,55 @@ class TorManager:
         self._original_socket = socket.socket
         self._patched = False
 
+    @staticmethod
+    def is_local_host(host):
+        """Verifica se o host é local (localhost, 127.0.0.1, etc)"""
+        if not host:
+            return False
+        # Remove porta se presente
+        host = host.split(':')[0].lower()
+        return host in ["localhost", "127.0.0.1", "::1"]
+
     @contextmanager
-    def tor_context(self):
-        """Context manager para usar TOR temporariamente"""
-        original_socket = None
+    def tor_context(self, target_url=None):
+        """Context manager para usar TOR temporariamente. 
+        Se target_url for passado e for local, não ativa o TOR.
+        """
+        is_local = False
+        if target_url:
+            from urllib.parse import urlparse
+            parsed = urlparse(target_url)
+            is_local = self.is_local_host(parsed.hostname)
+
+        # Salva o socket atual da classe socket (não do self)
+        import socket as std_socket
+        original_socket = std_socket.socket
+        
         try:
-            # Salva o socket original
-            original_socket = socket.socket
+            if not is_local:
+                # Aplica monkey patching apenas para este contexto
+                socks.set_default_proxy(socks.SOCKS5, "127.0.0.1", self.tor_port)
+                std_socket.socket = socks.socksocket
+                self._patched = True
+                log.debug("TOR context ativado")
+            else:
+                log.debug(f"TOR context ignorado para host local: {target_url}")
 
-            # Aplica monkey patching apenas para este contexto
-            socks.set_default_proxy(socks.SOCKS5, "127.0.0.1", self.tor_port)
-            socket.socket = socks.socksocket
-            self._patched = True
-
-            log.debug("TOR context ativado")
             yield
         finally:
-            # Sempre restaura o socket original
-            if original_socket:
-                socket.socket = original_socket
-                self._patched = False
+            # Sempre restaura o socket original no módulo global
+            std_socket.socket = original_socket
+            self._patched = False
+            if not is_local:
                 log.debug("TOR context desativado")
 
     def connect(self):
         """Estabelece conexão com o TOR (método legado)"""
         try:
+            import socket as std_socket
             # Configura SOCKS5 proxy
             socks.set_default_proxy(socks.SOCKS5, "127.0.0.1", self.tor_port)
-            socket.socket = socks.socksocket
+            std_socket.socket = socks.socksocket
             self._patched = True
             log.info(f"TOR configurado na porta {self.tor_port}")
             return True
@@ -57,7 +78,8 @@ class TorManager:
     def disconnect(self):
         """Remove a configuração TOR e volta ao socket normal"""
         try:
-            socket.socket = self._original_socket
+            import socket as std_socket
+            std_socket.socket = self._original_socket
             self._patched = False
             log.info("TOR desconectado")
             return True

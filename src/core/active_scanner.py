@@ -3,6 +3,7 @@ Módulo de Scanner Ativo de Vulnerabilidades
 Este módulo testa ativamente os endpoints em busca de vulnerabilidades,
 enviando payloads específicos e analisando as respostas.
 """
+import threading
 import requests
 import os
 import json
@@ -38,6 +39,7 @@ class ActiveScanner:
     ):
         self.session = requests.Session()
         self.session.verify = False
+        self._lock = threading.Lock()
         self.use_tor = use_tor
         self.tor_port = tor_port
         self.tor_manager = None
@@ -63,12 +65,13 @@ class ActiveScanner:
         log.info("Scanner Ativo inicializado.")
 
     def _send_request(self, method, url, headers=None, data=None, timeout=10):
-        """Envia requisição usando TOR se configurado."""
-        if self.use_tor and self.tor_manager:
-            with self.tor_manager.tor_context():
+        """Envia requisição usando TOR se configurado, com bypass para local addresses. Thread-safe."""
+        with self._lock:
+            if self.use_tor and self.tor_manager:
+                with self.tor_manager.tor_context(target_url=url):
+                    return self.session.request(method, url, headers=headers, data=data, timeout=timeout)
+            else:
                 return self.session.request(method, url, headers=headers, data=data, timeout=timeout)
-        else:
-            return self.session.request(method, url, headers=headers, data=data, timeout=timeout)
 
     def _ensure_logs_dir(self) -> str:
         if not self._logs_dir:
@@ -459,13 +462,8 @@ class ActiveScanner:
         return results
 
     def _send_modified_request(self, original_request: Dict, insertion_point: Dict, payload: str, context_tag: str = None) -> requests.Response:
-        """Envia uma requisição modificada, com suporte a TOR."""
+        """Envia uma requisição modificada, com suporte a TOR delegado ao _send_request."""
         try:
-            # Conecta ao TOR se necessário
-            if self.use_tor and self.tor_manager:
-                if not self.tor_manager.connect():
-                    log.error("Falha ao conectar com TOR para requisição modificada")
-            
             method = original_request['method']
             url = original_request['url']
             headers = self._sanitize_headers(original_request.get('headers', {}))
@@ -521,10 +519,9 @@ class ActiveScanner:
             
             return response
             
-        finally:
-            # Sempre desconecta o TOR após a requisição
-            if self.use_tor and self.tor_manager:
-                self.tor_manager.disconnect()
+        except Exception as e:
+            log.error(f"Erro ao enviar requisição modificada: {e}")
+            raise
 
     def _check_sql_injection(self, base_request: Dict, point: Dict) -> List[Dict]:
         vulnerabilities = []

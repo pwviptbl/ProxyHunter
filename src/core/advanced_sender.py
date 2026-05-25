@@ -412,8 +412,8 @@ class AdvancedSender:
             # Configure proxies based on TOR setting
             if self.use_tor:
                 tor_manager = TorManager(tor_port=self.tor_port)
-                # Use context manager para TOR temporário
-                with tor_manager.tor_context():
+                # Use context manager para TOR temporário passando a URL para bypass de local addresses
+                with tor_manager.tor_context(target_url=full_url):
                     log.info(f"Sending request via TOR: {method} {full_url}")
                     response = requests.request(
                         method=method,
@@ -591,8 +591,8 @@ def send_from_raw(raw_request: str, param_name: str = None, new_value: str = Non
         # Configure proxies based on TOR setting
         if use_tor:
             tor_manager = TorManager(tor_port=tor_port)
-            # Use context manager para TOR temporário
-            with tor_manager.tor_context():
+            # Use context manager para TOR temporário passando a URL para bypass de local addresses
+            with tor_manager.tor_context(target_url=full_url):
                 log.info(f"Resending request via TOR: {method} {full_url}")
                 response = requests.request(
                     method=method,

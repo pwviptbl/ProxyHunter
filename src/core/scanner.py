@@ -3,6 +3,7 @@ Módulo de Scanner de Vulnerabilidades
 Detecta vulnerabilidades comuns em requisições e respostas HTTP
 """
 import re
+import threading
 from typing import Dict, List, Any
 from .logger_config import log
 
@@ -19,6 +20,7 @@ class VulnerabilityScanner:
     def __init__(self, technology_detector: TechnologyDetector = None, technology_manager: TechnologyManager = None):
         self.technology_detector = technology_detector
         self.technology_manager = technology_manager
+        self._lock = threading.Lock()
         self.sql_injection_patterns = [
             # MySQL errors
             r"(?i)sql\s+syntax",
@@ -492,19 +494,20 @@ class VulnerabilityScanner:
         return self._scan_from_data(request_data, response_data)
 
     def _scan_from_data(self, request_data: Dict[str, Any], response_data: Dict[str, Any]) -> List[Dict[str, Any]]:
-        vulnerabilities = []
-        vulnerabilities.extend(self._scan_for_secrets(request_data, response_data))
-        vulnerabilities.extend(self._detect_sql_injection(request_data, response_data))
-        vulnerabilities.extend(self._detect_xss(request_data, response_data))
-        vulnerabilities.extend(self._detect_path_traversal(request_data, response_data))
-        vulnerabilities.extend(self._detect_sensitive_info(request_data, response_data))
-        vulnerabilities.extend(self._detect_cve(request_data, response_data))
-        vulnerabilities.extend(self._detect_csrf(request_data, response_data))
-        vulnerabilities.extend(self._detect_missing_security_headers(request_data, response_data))
-        vulnerabilities.extend(self._detect_insecure_cookies(request_data, response_data))
-        vulnerabilities.extend(self._detect_information_leakage(request_data, response_data))
-        vulnerabilities.extend(self._scan_javascript_content(request_data, response_data))
-        return vulnerabilities
+        with self._lock:
+            vulnerabilities = []
+            vulnerabilities.extend(self._scan_for_secrets(request_data, response_data))
+            vulnerabilities.extend(self._detect_sql_injection(request_data, response_data))
+            vulnerabilities.extend(self._detect_xss(request_data, response_data))
+            vulnerabilities.extend(self._detect_path_traversal(request_data, response_data))
+            vulnerabilities.extend(self._detect_sensitive_info(request_data, response_data))
+            vulnerabilities.extend(self._detect_cve(request_data, response_data))
+            vulnerabilities.extend(self._detect_csrf(request_data, response_data))
+            vulnerabilities.extend(self._detect_missing_security_headers(request_data, response_data))
+            vulnerabilities.extend(self._detect_insecure_cookies(request_data, response_data))
+            vulnerabilities.extend(self._detect_information_leakage(request_data, response_data))
+            vulnerabilities.extend(self._scan_javascript_content(request_data, response_data))
+            return vulnerabilities
 
     def _scan_for_secrets(self, request_data: Dict, response_data: Dict) -> List[Dict]:
         """Analisa o corpo e os cabeçalhos da resposta em busca de segredos hardcoded."""

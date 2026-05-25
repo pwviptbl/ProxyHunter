@@ -1,4 +1,4 @@
-from PySide6.QtCore import Qt, Signal, QAbstractTableModel, QModelIndex, QSortFilterProxyModel, QThread
+from PySide6.QtCore import Qt, Signal, QAbstractTableModel, QModelIndex, QSortFilterProxyModel, QThread, QTimer
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QPushButton, QLabel, QComboBox,
                                QGroupBox, QHBoxLayout, QTableView, QAbstractItemView,
                                QTextEdit, QTabWidget, QSplitter, QHeaderView, QMessageBox, QLineEdit)
@@ -51,6 +51,11 @@ class ScannerTab(QWidget):
         self.active_scanner = active_scanner
         self.scan_worker = None
         self.scan_queue = []
+        
+        # Timer para refresh debounced/throttled da UI
+        self.refresh_timer = QTimer(self)
+        self.refresh_timer.setSingleShot(True)
+        self.refresh_timer.timeout.connect(self._do_refresh)
 
         layout = QVBoxLayout(self)
 
@@ -243,8 +248,17 @@ class ScannerTab(QWidget):
             return
         self._append_scan_log(f"\n🚨 {len(vulnerabilities)} vulnerabilidade(s) encontrada(s)!")
         log.info(f"{len(vulnerabilities)} novas vulnerabilidades ativas encontradas para {request_data['id']}. Atualizando UI.")
+        
+        # Salva no banco/memória (history manager é thread-safe)
         self.history_manager.add_vulnerabilities_to_entry(request_data['id'], vulnerabilities)
-        self.refresh_vulnerabilities()
+        
+        # Envia sinal para a UI atualizar as tabelas de forma thread-safe
+        ui_queue = self.history_manager.get_ui_queue() if hasattr(self.history_manager, 'get_ui_queue') else None
+        if ui_queue:
+            ui_queue.put({"type": "refresh_vulnerabilities", "data": None})
+        else:
+            # Fallback se não houver fila (não recomendado para threads)
+            self.refresh_vulnerabilities()
 
     def _on_selection_changed(self, selected, deselected):
         if not selected.indexes():
@@ -289,8 +303,16 @@ class ScannerTab(QWidget):
         self._apply_filters()
 
     def refresh_vulnerabilities(self):
+        """Agenda um refresh da tabela de vulnerabilidades."""
+        if not self.refresh_timer.isActive():
+            self.refresh_timer.start(500) # Máximo 2 refreshes por segundo
+
+    def _do_refresh(self):
+        """Executa o refresh real dos dados."""
         vulnerabilities = []
-        for entry in self.history_manager.get_history():
+        # Obtém histórico de forma thread-safe
+        history_data = self.history_manager.get_history()
+        for entry in history_data:
             if entry.get('vulnerabilities'):
                 for i, vuln in enumerate(entry['vulnerabilities'], 1):
                     vulnerabilities.append({

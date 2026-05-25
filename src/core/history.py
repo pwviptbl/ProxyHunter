@@ -12,6 +12,15 @@ class RequestHistory:
         self.max_items = 1000
         self.current_id = 0
         self._lock = threading.Lock()
+        self.ui_queue = None
+
+    def set_ui_queue(self, queue):
+        """Define a fila de UI para notificações."""
+        self.ui_queue = queue
+
+    def get_ui_queue(self):
+        """Retorna a fila de UI."""
+        return self.ui_queue
 
     def add_request(self, flow: http.HTTPFlow, vulnerabilities=None):
         """Adiciona uma requisição ao histórico"""

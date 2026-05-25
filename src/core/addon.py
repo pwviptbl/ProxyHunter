@@ -22,7 +22,7 @@ from . import target_processor
 class InterceptAddon:
     """Addon do mitmproxy para interceptar e modificar requisições"""
 
-    def __init__(self, config: InterceptConfig, history: RequestHistory = None, cookie_manager: CookieManager = None, spider: Spider = None, websocket_history: WebSocketHistory = None, technology_manager: TechnologyManager = None):
+    def __init__(self, config: InterceptConfig, history: RequestHistory = None, cookie_manager: CookieManager = None, spider: Spider = None, websocket_history: WebSocketHistory = None, technology_manager: TechnologyManager = None, active_scanner: ActiveScanner = None):
         self.config = config
         self.history = history
         self.cookie_manager = cookie_manager
@@ -35,10 +35,16 @@ class InterceptAddon:
             technology_detector=self.technology_detector,
             technology_manager=self.technology_manager
         )  # Scanner passivo
-        self.active_scanner = ActiveScanner(
-            oast_client=OASTClient(self.config),
-            enabled_modules=self.config.get_active_scan_modules()
-        )  # Scanner ativo
+        
+        # Usa o scanner ativo fornecido ou cria um novo se necessário
+        if active_scanner:
+            self.active_scanner = active_scanner
+        else:
+            self.active_scanner = ActiveScanner(
+                oast_client=OASTClient(self.config),
+                enabled_modules=self.config.get_active_scan_modules()
+            )  # Scanner ativo fallback
+            
         self.spider = spider
         self.websocket_history = websocket_history
 

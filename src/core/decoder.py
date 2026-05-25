@@ -12,13 +12,15 @@ class Decoder:
 
     @staticmethod
     def b64_decode(input_text: str) -> str:
-        """Decodifica uma string de Base64.
-        
-        Raises:
-            binascii.Error: Se a entrada não for um Base64 válido.
-            UnicodeDecodeError: Se o resultado decodificado não for um UTF-8 válido.
-        """
-        return base64.b64decode(input_text.encode('utf-8')).decode('utf-8')
+        """Decodifica uma string de Base64, com fallback para ISO-8859-1."""
+        decoded_bytes = base64.b64decode(input_text.encode('utf-8'))
+        try:
+            return decoded_bytes.decode('utf-8')
+        except UnicodeDecodeError:
+            try:
+                return decoded_bytes.decode('iso-8859-1')
+            except UnicodeDecodeError:
+                return decoded_bytes.decode('utf-8', errors='replace')
 
     @staticmethod
     def url_encode(input_text: str) -> str:

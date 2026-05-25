@@ -28,35 +28,48 @@ class BrowserManager:
                 screen_height = user32.GetSystemMetrics(1)
                 return screen_width, screen_height
             else:
-                # Para Linux, usa xrandr para obter a resolução da tela principal
-                import subprocess
-                result = subprocess.run(['xrandr'], capture_output=True, text=True, check=False)
-                if result.returncode == 0:
-                    lines = result.stdout.split('\n')
-                    for line in lines:
-                        if ' connected ' in line and 'primary' in line:
-                            parts = line.split()
-                            for part in parts:
-                                if 'x' in part and '+' in part:
-                                    res = part.split('+')[0]
-                                    width, height = map(int, res.split('x'))
-                                    return width, height
-                    # Se não há primary, pega a primeira conectada
-                    for line in lines:
-                        if ' connected ' in line:
-                            parts = line.split()
-                            for part in parts:
-                                if 'x' in part and '+' in part:
-                                    res = part.split('+')[0]
-                                    width, height = map(int, res.split('x'))
-                                    return width, height
-                # Fallback para tkinter se xrandr falhar
-                import tkinter as tk
-                root = tk.Tk()
-                screen_width = root.winfo_screenwidth()
-                screen_height = root.winfo_screenheight()
-                root.destroy()
-                return screen_width, screen_height
+                # Para Linux, tenta xrandr primeiro
+                try:
+                    import subprocess
+                    result = subprocess.run(['xrandr'], capture_output=True, text=True, check=False)
+                    if result.returncode == 0:
+                        lines = result.stdout.split('\n')
+                        for line in lines:
+                            if ' connected ' in line and 'primary' in line:
+                                parts = line.split()
+                                for part in parts:
+                                    if 'x' in part and '+' in part:
+                                        res = part.split('+')[0]
+                                        width, height = map(int, res.split('x'))
+                                        return width, height
+                        # Se não há primary, pega a primeira conectada
+                        for line in lines:
+                            if ' connected ' in line:
+                                parts = line.split()
+                                for part in parts:
+                                    if 'x' in part and '+' in part:
+                                        res = part.split('+')[0]
+                                        width, height = map(int, res.split('x'))
+                                        return width, height
+                except Exception as e:
+                    print(f"[DEBUG] xrandr failed: {e}")
+
+                # Evita tkinter em Linux se estiver usando PySide6 (conhecido por causar segfaults)
+                # Verifica se PROXYHUNTER_SAFE_MODE está ativo ou se PySide6 já está carregado
+                if os.getenv("PROXYHUNTER_SAFE_MODE") == "1" or "PySide6" in sys.modules:
+                    print("[DEBUG] Skipping tkinter to avoid segfault with PySide6. Using default resolution.")
+                    return 1920, 1080
+
+                try:
+                    import tkinter as tk
+                    root = tk.Tk()
+                    screen_width = root.winfo_screenwidth()
+                    screen_height = root.winfo_screenheight()
+                    root.destroy()
+                    return screen_width, screen_height
+                except Exception as tk_e:
+                    print(f"[DEBUG] tkinter fallback failed: {tk_e}")
+                    return 1920, 1080
         except Exception as e:
             print(f"[WARNING] Falha ao obter dimensões da tela: {e}. Usando valores padrão.")
             return 1920, 1080  # Valores padrão
@@ -181,6 +194,11 @@ class BrowserManager:
             await self.browser.close()
         if self.playwright:
             await self.playwright.stop()
+
+        # Limpar instâncias para permitir nova inicialização em um novo event loop
+        self.browser = None
+        self.page = None
+        self.playwright = None
 
         # Para o loop de eventos
         loop = asyncio.get_event_loop()
