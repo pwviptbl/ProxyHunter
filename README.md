@@ -59,8 +59,33 @@ Aplicação com interface gráfica (PySide6) organizada em abas, e uma CLI para 
 
 - CLI para executar headless, crawl (HTTP ou Playwright), exportar histórico/spider, rodar scans e gerar relatório em Markdown.
 - Agente autônomo (Playwright + LLM: Gemini/OpenAI/Ollama) para navegação e preenchimento de formulários.
+- Campanhas de rotas capturadas: navegação manual pelo proxy, filtro de ruído estático, deduplicação e scan em lote das requests testáveis.
 
 Detalhes por aba: ver `docs/funcionalidades.md`.
+
+### Campanhas para sistemas legados
+
+Para aplicações com frames e menus antigos, como e-Cidade, o fluxo recomendado é
+capturar a navegação manual e depois rodar o scanner somente no que tem
+superfície de teste:
+
+Na GUI, use a aba `Campanhas` para iniciar/finalizar captura, revisar a lista,
+importar/exportar campanhas e executar scan selecionado ou em lote.
+
+```bash
+./.venv/bin/python scripts/cli.py campaign capture https://alvo.local/e-cidade \
+  --scope alvo.local \
+  --out logs/ecidade-campaign.json
+
+./.venv/bin/python scripts/cli.py campaign scan \
+  --file logs/ecidade-campaign.json \
+  --history-out logs/ecidade-campaign-history.json \
+  --report reports/ecidade-campaign.md
+```
+
+Por padrão, a campanha mantém `GET` com parâmetro e `POST`/`PUT`/`PATCH`/`DELETE`
+com query ou corpo testável, ignorando recursos estáticos como JS, CSS, imagens,
+fontes e PDFs. Veja `docs/CAMPANHAS.md`.
 
 ## Roadmap (Ideias de Próximas Funcionalidades)
 

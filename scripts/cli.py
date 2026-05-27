@@ -103,6 +103,7 @@ from src.core.logger_config import log
 from src.core.scanner import VulnerabilityScanner
 from src.core.active_scanner import ActiveScanner
 from src.core.oast_client import OASTClient
+from src.core.campaign import build_campaign, campaign_routes
 
 
 @cli.command('toggle')
@@ -298,6 +299,247 @@ def _load_ai_config() -> dict:
         except Exception:
             pass
     return {}
+
+
+def _entry_to_base_request(entry: dict) -> dict:
+    return {
+        'method': entry.get('method', ''),
+        'url': entry.get('url', ''),
+        'headers': entry.get('request_headers', {}) or entry.get('headers', {}) or {},
+        'body': entry.get('request_body', '') or entry.get('body', '') or '',
+    }
+
+
+def _scan_campaign_entries(entries, run_passive: bool, run_active: bool, limit: int | None = None):
+    matches = list(entries or [])
+    if limit is not None:
+        matches = matches[:max(1, limit)]
+
+    scanner = VulnerabilityScanner() if run_passive else None
+    config = InterceptConfig()
+    active = None
+    if run_active:
+        active = ActiveScanner(
+            oast_client=OASTClient(config),
+            enabled_modules=config.get_active_scan_modules()
+        )
+
+    total_added = 0
+    for index, entry in enumerate(matches, start=1):
+        click.echo(f"[{index}/{len(matches)}] {entry.get('method')} {entry.get('url')}")
+        if scanner:
+            passive = scanner.scan_entry(entry)
+            total_added += _merge_vulns(entry, passive)
+        if active:
+            active_vulns = active.scan_request(_entry_to_base_request(entry))
+            total_added += _merge_vulns(entry, active_vulns)
+
+    return len(matches), total_added
+
+
+@cli.group('campaign')
+def campaign_group():
+    """Campanhas reutilizaveis de rotas capturadas para scan focado."""
+    pass
+
+
+@campaign_group.command('capture')
+@click.argument('target_url')
+@click.option('--name', default=None, help="Nome da campanha.")
+@click.option('--scope', multiple=True, help="Termo de escopo. Pode ser repetido.")
+@click.option('--port', default=None, type=int, help="Porta do proxy (padrao: configuracao salva).")
+@click.option('--out', 'out_file', default="logs/campaign.json", show_default=True, help="Arquivo de saida da campanha.")
+@click.option('--include-static', is_flag=True, default=False, help="Inclui recursos estaticos, se tambem tiverem superficie testavel.")
+def campaign_capture(target_url, name, scope, port, out_file, include_static):
+    """
+    Captura navegacao manual pelo proxy e salva uma campanha focada.
+
+    Use o navegador apontando para o proxy informado, navegue pelo sistema e
+    pressione Ctrl+C para finalizar e exportar as rotas testaveis.
+    """
+    config = InterceptConfig()
+    if port is not None:
+        config.port = port
+    actual_port = config.get_port()
+
+    history = RequestHistory()
+    spider = Spider()
+    selected_scope = list(scope) or [target_url]
+    spider.start(target_urls=selected_scope, max_depth=0, max_urls=100000)
+
+    click.echo(f"Proxy de captura em http://127.0.0.1:{actual_port}")
+    click.echo("Configure o navegador para usar esse proxy, navegue no sistema e pressione Ctrl+C para salvar.")
+
+    master, thread = _start_proxy_background(config, actual_port, history=history, spider=spider)
+    try:
+        while True:
+            time.sleep(1)
+            total = len(history.get_history())
+            click.echo(f"\rRequisicoes capturadas: {total}", nl=False)
+    except KeyboardInterrupt:
+        click.echo("\nFinalizando captura...")
+    finally:
+        try:
+            if master is not None:
+                master.shutdown()
+        except Exception:
+            pass
+        thread.join(timeout=3)
+        spider.stop()
+
+    entries = _serialize_history(history)
+    campaign = build_campaign(
+        entries,
+        name=name or target_url,
+        scope=selected_scope,
+        include_static=include_static,
+    )
+    _save_json(out_file, campaign)
+
+    stats = campaign.get("stats", {})
+    click.echo(click.style(f"Campanha salva em: {out_file}", fg="green"))
+    click.echo(f"- Entradas capturadas: {stats.get('input', 0)}")
+    click.echo(f"- Rotas testaveis: {stats.get('routes', 0)}")
+    click.echo(f"- Ignoradas por estatico: {stats.get('ignored_static', 0)}")
+    click.echo(f"- Ignoradas sem superficie: {stats.get('ignored_no_surface', 0)}")
+    click.echo(f"- Duplicadas ignoradas: {stats.get('ignored_duplicate', 0)}")
+
+
+@campaign_group.command('build')
+@click.option('--file', 'history_file', default="logs/cli_history.json", show_default=True, help="Historico JSON de entrada.")
+@click.option('--name', default="campanha", show_default=True, help="Nome da campanha.")
+@click.option('--scope', multiple=True, help="Termo de escopo. Pode ser repetido.")
+@click.option('--out', 'out_file', default="logs/campaign.json", show_default=True, help="Arquivo de saida da campanha.")
+@click.option('--include-static', is_flag=True, default=False, help="Inclui recursos estaticos, se tambem tiverem superficie testavel.")
+def campaign_build(history_file, name, scope, out_file, include_static):
+    """Cria campanha focada a partir de um historico ja salvo."""
+    try:
+        entries = _load_json(history_file)
+    except FileNotFoundError:
+        click.echo(f"Arquivo nao encontrado: {history_file}")
+        return
+
+    campaign = build_campaign(
+        entries,
+        name=name,
+        scope=list(scope),
+        include_static=include_static,
+    )
+    _save_json(out_file, campaign)
+    stats = campaign.get("stats", {})
+    click.echo(click.style(f"Campanha salva em: {out_file}", fg="green"))
+    click.echo(f"- Entrada: {stats.get('input', 0)}")
+    click.echo(f"- Em escopo: {stats.get('in_scope', 0)}")
+    click.echo(f"- Rotas testaveis: {stats.get('routes', 0)}")
+    click.echo(f"- Ignoradas por estatico: {stats.get('ignored_static', 0)}")
+    click.echo(f"- Ignoradas sem superficie: {stats.get('ignored_no_surface', 0)}")
+    click.echo(f"- Duplicadas ignoradas: {stats.get('ignored_duplicate', 0)}")
+
+
+@campaign_group.command('list')
+@click.option('--file', 'campaign_file', default="logs/campaign.json", show_default=True, help="Arquivo da campanha.")
+@click.option('--limit', default=50, show_default=True, type=int, help="Limite de rotas.")
+def campaign_list(campaign_file, limit):
+    """Lista as rotas testaveis de uma campanha."""
+    try:
+        campaign = _load_json(campaign_file)
+    except FileNotFoundError:
+        click.echo(f"Arquivo nao encontrado: {campaign_file}")
+        return
+
+    routes = campaign_routes(campaign)
+    if not routes:
+        click.echo("Campanha sem rotas testaveis.")
+        return
+
+    stats = campaign.get("stats", {})
+    click.echo(f"Campanha: {campaign.get('name', '')}")
+    click.echo(f"Rotas: {len(routes)} | Entrada original: {stats.get('input', 0)}")
+    click.echo(click.style(f"{'#':<4} {'METODO':<8} {'STATUS':<6} {'URL'}", bold=True))
+    for entry in routes[:max(1, limit)]:
+        click.echo(
+            f"{entry.get('id', ''):<4} "
+            f"{entry.get('method', ''):<8} "
+            f"{entry.get('status', ''):<6} "
+            f"{entry.get('url', '')}"
+        )
+
+
+@campaign_group.command('import')
+@click.argument('source_file')
+@click.option('--out', 'out_file', default="logs/campaign.json", show_default=True, help="Destino local da campanha.")
+def campaign_import(source_file, out_file):
+    """Importa uma campanha salva para o destino padrao/local."""
+    try:
+        campaign = _load_json(source_file)
+    except FileNotFoundError:
+        click.echo(f"Arquivo nao encontrado: {source_file}")
+        return
+
+    if not isinstance(campaign, dict) or campaign.get("schema") != "proxyhunter.campaign":
+        click.echo("Arquivo informado nao parece ser uma campanha do ProxyHunter.")
+        return
+
+    _save_json(out_file, campaign)
+    routes = campaign_routes(campaign)
+    click.echo(click.style(f"Campanha importada para: {out_file}", fg="green"))
+    click.echo(f"- Nome: {campaign.get('name', '')}")
+    click.echo(f"- Rotas testaveis: {len(routes)}")
+
+
+@campaign_group.command('scan')
+@click.option('--file', 'campaign_file', default="logs/campaign.json", show_default=True, help="Arquivo da campanha.")
+@click.option('--active/--no-active', default=True, show_default=True, help="Executa scanner ativo.")
+@click.option('--passive/--no-passive', default=True, show_default=True, help="Executa scanner passivo.")
+@click.option('--limit', default=None, type=int, help="Limite de rotas a escanear.")
+@click.option('--history-out', default="logs/campaign_history.json", show_default=True, help="Historico de saida com achados.")
+@click.option('--report', 'report_file', default=None, help="Relatorio Markdown opcional.")
+def campaign_scan(campaign_file, active, passive, limit, history_out, report_file):
+    """Executa scan em lote nas rotas testaveis salvas na campanha."""
+    if not active and not passive:
+        click.echo("Nada para executar: habilite --active ou --passive.")
+        return
+
+    try:
+        campaign = _load_json(campaign_file)
+    except FileNotFoundError:
+        click.echo(f"Arquivo nao encontrado: {campaign_file}")
+        return
+
+    routes = campaign_routes(campaign)
+    if not routes:
+        click.echo("Campanha sem rotas testaveis.")
+        return
+
+    tested, total_added = _scan_campaign_entries(routes, run_passive=passive, run_active=active, limit=limit)
+    _save_json(history_out, routes)
+    _save_json(campaign_file, campaign)
+
+    click.echo(click.style(f"Scan concluido. Rotas testadas: {tested}. Novas vulnerabilidades: {total_added}.", fg="green"))
+    click.echo(f"Historico salvo em: {history_out}")
+
+    if report_file:
+        vulns = _extract_vulns(routes)
+        if vulns:
+            groups, order = _group_vulns(vulns)
+            total = sum(len(v) for v in groups.values())
+            lines = ["# Relatorio de Campanha", f"- Campanha: {campaign.get('name', '')}", f"- Total: {total}", ""]
+            for sev in order:
+                items = groups.get(sev, [])
+                if not items:
+                    continue
+                lines.append(f"## {sev}")
+                for v in items:
+                    lines.append(f"- **{v.get('type', 'N/A')}**")
+                    lines.append(f"  - URL: {v.get('url', 'N/A')}")
+                    lines.append(f"  - Metodo: {v.get('method', 'N/A')}")
+                    if v.get("evidence"):
+                        lines.append(f"  - Evidencia: `{str(v.get('evidence'))[:200]}`")
+                lines.append("")
+            _write_text(report_file, "\n".join(lines).strip() + "\n")
+            click.echo(f"Relatorio salvo em: {report_file}")
+        else:
+            click.echo("Nenhuma vulnerabilidade encontrada para relatorio.")
 
 
 @cli.command('crawl')
@@ -844,4 +1086,3 @@ def agent_navigate(url, objective, username, password, headful):
 
 if __name__ == "__main__":
     cli()
-

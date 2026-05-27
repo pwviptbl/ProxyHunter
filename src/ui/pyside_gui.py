@@ -37,6 +37,7 @@ from src.ui.tabs.jwt_editor_tab import JWTEditorTab
 from src.ui.tabs.comparator_tab import ComparatorTab
 from src.ui.tabs.cookie_jar_tab import CookieJarTab
 from src.ui.tabs.scanner_tab import ScannerTab
+from src.ui.tabs.campaign_tab import CampaignTab
 from src.ui.tabs.spider_tab import SpiderTab
 from src.ui.tabs.websocket_tab import WebSocketTab
 from src.ui.tabs.technologies_tab import TechnologiesTab
@@ -247,6 +248,11 @@ class ProxyGUI(QMainWindow):
         # Cria e adiciona a aba do Scanner
         self.scanner_tab = ScannerTab(self.history, self.active_scanner)
         add_tab(self.scanner_tab, "Scanner")
+
+        # Cria e adiciona a aba de campanhas
+        self.campaign_tab = CampaignTab(self.history, self.active_scanner)
+        self.campaign_tab.refresh_vulnerabilities_requested.connect(self.scanner_tab.refresh_vulnerabilities)
+        add_tab(self.campaign_tab, "Campanhas")
         
         # Cria e adiciona a aba do Spider/Crawler
         self.spider_tab = SpiderTab(self.spider, self.config)
@@ -413,6 +419,8 @@ class ProxyGUI(QMainWindow):
             self.stop_proxy()
         if hasattr(self, 'scanner_tab'):
             self.scanner_tab.stop_active_scan()
+        if hasattr(self, 'campaign_tab'):
+            self.campaign_tab.stop_scan()
         event.accept()
 
     # --- Slots para Sinais do Navegador ---
@@ -442,6 +450,8 @@ class ProxyGUI(QMainWindow):
         if msg_type == "new_history_entry":
             # Adiciona ao histórico thread-safely na thread principal
             self.history_tab.add_history_entry(data)
+            if hasattr(self, 'campaign_tab'):
+                self.campaign_tab.add_captured_entry(data)
             # Atualiza a lista de vulnerabilidades se houver vulnerabilidades detectadas (passivas)
             if data.get('vulnerabilities'):
                 self.scanner_tab.refresh_vulnerabilities()
