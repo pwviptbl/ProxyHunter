@@ -25,6 +25,14 @@ ZIP e outros recursos estaticos.
 7. Revise a lista de rotas testaveis.
 8. Use `Exportar`, `Importar`, `Scan Selecionado` ou `Scan Todos`.
 
+Antes do scan/exportacao, use `Excluir Selecionado` ou o menu de contexto da
+tabela para remover rotas auxiliares repetidas, como login, frames comuns ou
+endpoints de apoio que nao fazem parte do modulo em teste.
+
+Se marcar `Simultaneo`, cada rota testavel nova entra em uma fila e o scanner
+vai processando em ordem enquanto a navegacao continua. Use os checkboxes
+`Passivo` e `Ativo` para controlar quais testes entram nessa fila.
+
 ### Pela CLI
 
 ```bash

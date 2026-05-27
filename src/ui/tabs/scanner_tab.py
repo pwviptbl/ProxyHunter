@@ -198,7 +198,8 @@ class ScannerTab(QWidget):
             'method': entry.get('method'),
             'url': entry.get('url'),
             'headers': entry.get('request_headers', {}),
-            'body': entry.get('request_body', '')
+            'body': entry.get('request_body', ''),
+            '_scan_label': f"[Histórico ID {entry.get('id')} {entry.get('method')} {entry.get('url')}]",
         }
         if self.scan_worker:
             try:

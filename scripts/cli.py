@@ -310,6 +310,12 @@ def _entry_to_base_request(entry: dict) -> dict:
     }
 
 
+def _scan_label(index: int, total: int, entry: dict, prefix: str = "Scan") -> str:
+    metadata = entry.get("campaign_metadata") or {}
+    source_id = metadata.get("source_history_id") or entry.get("id", "")
+    return f"[{prefix} {index}/{total} ID {source_id} {entry.get('method', '')} {entry.get('url', '')}]"
+
+
 def _scan_campaign_entries(entries, run_passive: bool, run_active: bool, limit: int | None = None):
     matches = list(entries or [])
     if limit is not None:
@@ -326,12 +332,15 @@ def _scan_campaign_entries(entries, run_passive: bool, run_active: bool, limit: 
 
     total_added = 0
     for index, entry in enumerate(matches, start=1):
-        click.echo(f"[{index}/{len(matches)}] {entry.get('method')} {entry.get('url')}")
+        label = _scan_label(index, len(matches), entry, prefix="Campanha")
+        click.echo(label)
         if scanner:
             passive = scanner.scan_entry(entry)
             total_added += _merge_vulns(entry, passive)
         if active:
-            active_vulns = active.scan_request(_entry_to_base_request(entry))
+            base_request = _entry_to_base_request(entry)
+            base_request["_scan_label"] = label
+            active_vulns = active.scan_request(base_request)
             total_added += _merge_vulns(entry, active_vulns)
 
     return len(matches), total_added
@@ -729,6 +738,7 @@ def scan_active(request_id, history_file):
         'url': entry.get('url', ''),
         'headers': entry.get('request_headers', {}) or {},
         'body': entry.get('request_body', '') or '',
+        '_scan_label': f"[Histórico ID {entry.get('id')} {entry.get('method')} {entry.get('url')}]",
     }
     vulns = active.scan_request(base_request)
     if vulns:
@@ -773,6 +783,7 @@ def scan_both(request_id, history_file):
         'url': entry.get('url', ''),
         'headers': entry.get('request_headers', {}) or {},
         'body': entry.get('request_body', '') or '',
+        '_scan_label': f"[Histórico ID {entry.get('id')} {entry.get('method')} {entry.get('url')}]",
     }
     active_vulns = active.scan_request(base_request)
     if active_vulns:
@@ -825,7 +836,7 @@ def scan_both_domain(domain, history_file, limit):
     )
 
     total_added = 0
-    for entry in matches:
+    for index, entry in enumerate(matches, start=1):
         passive = scanner.scan_entry(entry)
         total_added += _merge_vulns(entry, passive)
 
@@ -834,6 +845,7 @@ def scan_both_domain(domain, history_file, limit):
             'url': entry.get('url', ''),
             'headers': entry.get('request_headers', {}) or {},
             'body': entry.get('request_body', '') or '',
+            '_scan_label': _scan_label(index, len(matches), entry, prefix="Domínio"),
         }
         active_vulns = active.scan_request(base_request)
         total_added += _merge_vulns(entry, active_vulns)

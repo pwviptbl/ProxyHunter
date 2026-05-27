@@ -18,7 +18,9 @@ from PySide6.QtWidgets import (
     QTextEdit,
     QVBoxLayout,
     QWidget,
+    QMenu,
 )
+from PySide6.QtGui import QAction
 
 from src.core.active_scanner import ActiveScanner
 from src.core.campaign import build_campaign, campaign_routes
@@ -60,12 +62,14 @@ class CampaignScanWorker(QThread):
                     vulnerabilities.extend(self.passive_scanner.scan_entry(route) or [])
 
                 if self.run_active:
+                    label = self._route_label(index + 1, total, route)
                     request_data = {
                         "id": route.get("id"),
                         "method": route.get("method"),
                         "url": route.get("url"),
                         "headers": route.get("request_headers", {}) or route.get("headers", {}) or {},
                         "body": route.get("request_body", "") or route.get("body", "") or "",
+                        "_scan_label": label,
                     }
                     vulnerabilities.extend(self.active_scanner.scan_request(request_data) or [])
 
@@ -92,6 +96,12 @@ class CampaignScanWorker(QThread):
         route["vulnerabilities"] = existing
         return added
 
+    @staticmethod
+    def _route_label(index, total, route):
+        metadata = route.get("campaign_metadata") or {}
+        source_id = metadata.get("source_history_id") or route.get("id", "")
+        return f"[Campanha {index}/{total} ID {source_id} {route.get('method', '')} {route.get('url', '')}]"
+
 
 class CampaignTab(QWidget):
     """Aba para capturar, importar, exportar e escanear campanhas de rotas."""
@@ -106,6 +116,9 @@ class CampaignTab(QWidget):
         self.capture_start_id = None
         self.captured_entries = []
         self.scan_worker = None
+        self.auto_scan_queue = []
+        self.auto_scan_signatures = set()
+        self.auto_scan_running = False
 
         layout = QVBoxLayout(self)
         self._setup_capture_section(layout)
@@ -148,6 +161,10 @@ class CampaignTab(QWidget):
         export_button.clicked.connect(self.export_campaign)
         actions.addWidget(export_button)
 
+        remove_button = QPushButton("Excluir Selecionado")
+        remove_button.clicked.connect(self.remove_selected_route)
+        actions.addWidget(remove_button)
+
         self.passive_checkbox = QCheckBox("Passivo")
         self.passive_checkbox.setChecked(True)
         actions.addWidget(self.passive_checkbox)
@@ -155,6 +172,11 @@ class CampaignTab(QWidget):
         self.active_checkbox = QCheckBox("Ativo")
         self.active_checkbox.setChecked(True)
         actions.addWidget(self.active_checkbox)
+
+        self.auto_scan_checkbox = QCheckBox("Simultaneo")
+        self.auto_scan_checkbox.setToolTip("Durante a captura, escaneia automaticamente cada rota testavel nova.")
+        self.auto_scan_checkbox.stateChanged.connect(self._on_auto_scan_toggled)
+        actions.addWidget(self.auto_scan_checkbox)
 
         scan_selected_button = QPushButton("Scan Selecionado")
         scan_selected_button.clicked.connect(self.scan_selected)
@@ -185,6 +207,8 @@ class CampaignTab(QWidget):
         header.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
         header.setSectionResizeMode(4, QHeaderView.ResizeMode.Stretch)
         self.table.selectionModel().selectionChanged.connect(self._on_selection_changed)
+        self.table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.table.customContextMenuRequested.connect(self._show_context_menu)
         layout.addWidget(self.table)
         group.setLayout(layout)
         parent.addWidget(group)
@@ -204,6 +228,9 @@ class CampaignTab(QWidget):
             entries = self.history_manager.get_history()
             self.capture_start_id = max([e.get("id", 0) for e in entries] or [0])
             self.captured_entries = []
+            self.auto_scan_queue = []
+            self.auto_scan_signatures = set()
+            self.auto_scan_running = False
             self.campaign = build_campaign(
                 self.captured_entries,
                 name=self.name_input.text().strip() or "campanha-gui",
@@ -233,6 +260,8 @@ class CampaignTab(QWidget):
             scope=self._scope_terms(),
         )
         self._refresh_campaign_view(keep_details=True)
+        if self.auto_scan_checkbox.isChecked():
+            self._enqueue_auto_scan_routes()
 
     def build_from_history(self):
         self._build_campaign(self.history_manager.get_history())
@@ -242,6 +271,8 @@ class CampaignTab(QWidget):
         scope = self._scope_terms()
         self.campaign = build_campaign(entries, name=name, scope=scope)
         self._refresh_campaign_view()
+        if self.auto_scan_checkbox.isChecked():
+            self._enqueue_auto_scan_routes()
 
     def import_campaign(self):
         path, _ = QFileDialog.getOpenFileName(self, "Importar campanha", "logs", "JSON (*.json);;Todos (*.*)")
@@ -280,31 +311,67 @@ class CampaignTab(QWidget):
             return
         QMessageBox.information(self, "Exportar", f"Campanha exportada em:\n{path}")
 
+    def remove_selected_route(self):
+        row = self._selected_source_row()
+        if row is None:
+            QMessageBox.information(self, "Excluir", "Selecione uma rota da campanha.")
+            return
+        self._remove_route(row)
+
+    def _remove_route(self, row):
+        if self.scan_worker and self.scan_worker.isRunning():
+            QMessageBox.information(self, "Excluir", "Aguarde o scan atual finalizar antes de remover rotas.")
+            return
+        routes = campaign_routes(self.campaign or {})
+        route = self.model.get_route(row)
+        if not route or route not in routes:
+            return
+        routes.remove(route)
+        signature = self._route_signature(route)
+        self.auto_scan_queue = [item for item in self.auto_scan_queue if self._route_signature(item) != signature]
+        self.auto_scan_signatures.discard(signature)
+        self._update_campaign_route_stats()
+        self._refresh_campaign_view()
+
+    def _show_context_menu(self, pos):
+        row = self._selected_source_row()
+        if row is None:
+            return
+        menu = QMenu(self)
+        remove_action = QAction("Excluir da campanha", self)
+        remove_action.triggered.connect(lambda: self._remove_route(row))
+        menu.addAction(remove_action)
+        menu.exec_(self.table.viewport().mapToGlobal(pos))
+
     def scan_selected(self):
         row = self._selected_source_row()
         if row is None:
             QMessageBox.information(self, "Scan", "Selecione uma rota da campanha.")
             return
-        self._start_scan([self.model.get_route(row)])
+        self._start_scan([self.model.get_route(row)], automatic=False)
 
     def scan_all(self):
         routes = campaign_routes(self.campaign or {})
         if not routes:
             QMessageBox.information(self, "Scan", "Nao ha rotas testaveis na campanha.")
             return
-        self._start_scan(routes)
+        self._start_scan(routes, automatic=False)
 
-    def _start_scan(self, routes):
+    def _start_scan(self, routes, automatic=False):
         if self.scan_worker and self.scan_worker.isRunning():
-            QMessageBox.information(self, "Scan", "Ja existe um scan de campanha em execucao.")
-            return
+            if not automatic:
+                QMessageBox.information(self, "Scan", "Ja existe um scan de campanha em execucao.")
+            return False
         run_passive = self.passive_checkbox.isChecked()
         run_active = self.active_checkbox.isChecked()
         if not run_passive and not run_active:
-            QMessageBox.information(self, "Scan", "Habilite scan passivo ou ativo.")
-            return
+            if not automatic:
+                QMessageBox.information(self, "Scan", "Habilite scan passivo ou ativo.")
+            return False
 
-        self.details_text.clear()
+        self.auto_scan_running = automatic
+        if not automatic:
+            self.details_text.clear()
         self.scan_worker = CampaignScanWorker(routes, self.active_scanner, run_passive, run_active)
         self.scan_worker.route_started.connect(self._on_route_started)
         self.scan_worker.route_done.connect(self._on_route_done)
@@ -312,6 +379,7 @@ class CampaignTab(QWidget):
         self.scan_worker.finished_summary.connect(self._on_scan_finished)
         self.scan_worker.finished.connect(self._on_worker_finished)
         self.scan_worker.start()
+        return True
 
     def stop_scan(self):
         if self.scan_worker and self.scan_worker.isRunning():
@@ -326,6 +394,7 @@ class CampaignTab(QWidget):
         self._append_log(f"\n=== {index}/{total} {label} ===")
 
     def _on_route_done(self, route, vulnerabilities):
+        self._merge_route_into_current_campaign(route)
         self._refresh_campaign_view(keep_details=True)
         if route:
             metadata = route.get("campaign_metadata") or {}
@@ -342,6 +411,54 @@ class CampaignTab(QWidget):
         if self.scan_worker:
             self.scan_worker.deleteLater()
             self.scan_worker = None
+        if self.auto_scan_running:
+            self.auto_scan_running = False
+            self._start_next_auto_scan_batch()
+
+    def _enqueue_auto_scan_routes(self):
+        for route in campaign_routes(self.campaign or {}):
+            signature = self._route_signature(route)
+            if not signature or signature in self.auto_scan_signatures:
+                continue
+            self.auto_scan_signatures.add(signature)
+            self.auto_scan_queue.append(route)
+            self._append_log(f"[Auto] Rota enfileirada: {route.get('method')} {route.get('url')}")
+        self._start_next_auto_scan_batch()
+
+    def _start_next_auto_scan_batch(self):
+        if not self.auto_scan_checkbox.isChecked():
+            return
+        if self.scan_worker and self.scan_worker.isRunning():
+            return
+        if not self.auto_scan_queue:
+            return
+        if not self.passive_checkbox.isChecked() and not self.active_checkbox.isChecked():
+            self.status_label.setText("Scan simultaneo aguardando: habilite Passivo ou Ativo.")
+            return
+        routes = list(self.auto_scan_queue)
+        self.auto_scan_queue = []
+        self._start_scan(routes, automatic=True)
+
+    def _on_auto_scan_toggled(self):
+        if self.auto_scan_checkbox.isChecked():
+            self._enqueue_auto_scan_routes()
+        else:
+            self.auto_scan_queue = []
+            self.status_label.setText("Scan simultaneo desabilitado.")
+
+    def _merge_route_into_current_campaign(self, scanned_route):
+        if not scanned_route:
+            return
+        scanned_signature = self._route_signature(scanned_route)
+        for route in campaign_routes(self.campaign or {}):
+            if self._route_signature(route) == scanned_signature:
+                route["vulnerabilities"] = scanned_route.get("vulnerabilities", []) or []
+                return
+
+    @staticmethod
+    def _route_signature(route):
+        metadata = route.get("campaign_metadata") or {}
+        return metadata.get("signature")
 
     def _append_log(self, text):
         self.details_text.append(text)
@@ -397,6 +514,12 @@ class CampaignTab(QWidget):
             )
         if not keep_details:
             self.details_text.clear()
+
+    def _update_campaign_route_stats(self):
+        if not self.campaign:
+            return
+        stats = self.campaign.setdefault("stats", {})
+        stats["routes"] = len(campaign_routes(self.campaign))
 
     def _scope_terms(self):
         return [item.strip() for item in self.scope_input.text().split(",") if item.strip()]

@@ -49,6 +49,7 @@ class ActiveScanner:
             self.oast_available = True
         self.enabled_modules = enabled_modules
         self.log_callback = log_callback  # callback(msg: str) chamado para cada teste
+        self._current_scan_label = None
         self.scan_modules = self._load_scan_modules()
         self._logs_dir = None
         self.sql_error_patterns = [
@@ -116,6 +117,8 @@ class ActiveScanner:
 
     def _emit_log(self, msg: str):
         """Emite uma mensagem de log para a UI (se callback configurado) e para o logger."""
+        if self._current_scan_label:
+            msg = f"{self._current_scan_label} {msg}"
         log.info(msg)
         if self.log_callback:
             try:
@@ -447,10 +450,11 @@ class ActiveScanner:
         injection_points = self._derive_injection_points_for_modules(base_request)
         results: List[Dict[str, Any]] = []
 
-        for point in injection_points:
+        total_points = len(injection_points)
+        for point_index, point in enumerate(injection_points, start=1):
             for module in self.scan_modules:
                 try:
-                    msg = f"[Módulo] {module.__class__.__name__} → param: {point.get('parameter_name')} (location: {point.get('location')})"
+                    msg = f"[Módulo {point_index}/{total_points}] {module.__class__.__name__} → param: {point.get('parameter_name')} (location: {point.get('location')})"
                     self._emit_log(msg)
                     vulns = module.run_test(request_node, point, self.oast_client)
                     for vuln in vulns:
@@ -1245,60 +1249,65 @@ class ActiveScanner:
         return vulnerabilities
 
     def scan_request(self, base_request: Dict[str, Any]) -> List[Dict[str, Any]]:
+        previous_scan_label = self._current_scan_label
+        self._current_scan_label = base_request.get('_scan_label') or base_request.get('scan_label') or previous_scan_label
         vulnerabilities = []
+        try:
+            logs_dir = self._ensure_logs_dir()
+            log_file_path = os.path.join(logs_dir, "active_scanner_requests.log")
+            with open(log_file_path, 'a', encoding='utf-8') as f:
+                f.write(f"\n\n{'='*20} New Scan Started at {datetime.now()} for {base_request.get('method')} {base_request.get('url')} {'='*20}\n")
 
-        logs_dir = self._ensure_logs_dir()
-        log_file_path = os.path.join(logs_dir, "active_scanner_requests.log")
-        with open(log_file_path, 'a', encoding='utf-8') as f:
-            f.write(f"\n\n{'='*20} New Scan Started at {datetime.now()} for {base_request.get('method')} {base_request.get('url')} {'='*20}\n")
+            self._emit_log(f"--- SCANNER DEBUG: Iniciando varredura ativa em: {base_request.get('method')} {base_request.get('url')}")
+            self._emit_log(f"--- SCANNER DEBUG: Headers recebidos: {base_request.get('headers')}")
+            self._emit_log(f"--- SCANNER DEBUG: Body recebido: {base_request.get('body')}")
 
-        log.info(f"--- SCANNER DEBUG: Iniciando varredura ativa em: {base_request.get('method')} {base_request.get('url')}")
-        log.info(f"--- SCANNER DEBUG: Headers recebidos: {base_request.get('headers')}")
-        log.info(f"--- SCANNER DEBUG: Body recebido: {base_request.get('body')}")
+            insertion_points = self._get_insertion_points(base_request)
+            self._emit_log(f"--- SCANNER DEBUG: Pontos de inserção encontrados: {insertion_points}")
 
-        insertion_points = self._get_insertion_points(base_request)
-        log.info(f"--- SCANNER DEBUG: Pontos de inserção encontrados: {insertion_points}")
+            if not insertion_points and base_request.get('method', '').upper() == 'POST':
+                headers = {k.lower(): v for k, v in base_request.get('headers', {}).items()}
+                content_type = headers.get('content-type', 'Não especificado')
+                info_vuln = {
+                    'type': 'Scanner Info',
+                    'severity': 'Low',
+                    'source': 'Active',
+                    'url': base_request['url'],
+                    'method': base_request['method'],
+                    'description': 'O scan ativo para a requisição POST falhou ao encontrar parâmetros para teste. Isso geralmente ocorre se o cabeçalho Content-Type estiver ausente ou não for \'application/x-www-form-urlencoded\'.',
+                    'evidence': f'Content-Type recebido pelo scanner: {content_type}',
+                }
+                vulnerabilities.append(info_vuln)
 
-        if not insertion_points and base_request.get('method', '').upper() == 'POST':
-            headers = {k.lower(): v for k, v in base_request.get('headers', {}).items()}
-            content_type = headers.get('content-type', 'Não especificado')
-            info_vuln = {
-                'type': 'Scanner Info',
-                'severity': 'Low',
-                'source': 'Active',
-                'url': base_request['url'],
-                'method': base_request['method'],
-                'description': 'O scan ativo para a requisição POST falhou ao encontrar parâmetros para teste. Isso geralmente ocorre se o cabeçalho Content-Type estiver ausente ou não for \'application/x-www-form-urlencoded\'.',
-                'evidence': f'Content-Type recebido pelo scanner: {content_type}',
-            }
-            vulnerabilities.append(info_vuln)
+            total_insertion_points = len(insertion_points)
+            for point_index, point in enumerate(insertion_points, start=1):
+                param_name = point.get('name')
+                self._emit_log(f"▶ Ponto de inserção {point_index}/{total_insertion_points}: '{param_name}' (type={point.get('type')}, value={repr(str(point.get('value', ''))[:40])})")
+                self._emit_log(f"  [SQLi Login Bypass] → '{param_name}'")
+                vulnerabilities.extend(self._check_login_sqli(base_request, point))
+                self._emit_log(f"  [SQLi Error/Union/Stacked] → '{param_name}'")
+                vulnerabilities.extend(self._check_sql_injection(base_request, point))
+                self._emit_log(f"  [SQLi Boolean-Based] → '{param_name}'")
+                vulnerabilities.extend(self._check_boolean_sqli(base_request, point))
+                self._emit_log(f"  [SQLi Time-Based] → '{param_name}'")
+                vulnerabilities.extend(self._check_time_based_sqli(base_request, point))
+                self._emit_log(f"  [Command Injection] → '{param_name}'")
+                vulnerabilities.extend(self._check_command_injection(base_request, point))
+                self._emit_log(f"  [XSS] → '{param_name}'")
+                vulnerabilities.extend(self._check_xss(base_request, point))
+                self._emit_log(f"  [Path Traversal] → '{param_name}'")
+                vulnerabilities.extend(self._check_path_traversal(base_request, point))
 
-        for point in insertion_points:
-            param_name = point.get('name')
-            self._emit_log(f"▶ Ponto de inserção: '{param_name}' (type={point.get('type')}, value={repr(str(point.get('value', ''))[:40])})")
-            self._emit_log(f"  [SQLi Login Bypass] → '{param_name}'")
-            vulnerabilities.extend(self._check_login_sqli(base_request, point))
-            self._emit_log(f"  [SQLi Error/Union/Stacked] → '{param_name}'")
-            vulnerabilities.extend(self._check_sql_injection(base_request, point))
-            self._emit_log(f"  [SQLi Boolean-Based] → '{param_name}'")
-            vulnerabilities.extend(self._check_boolean_sqli(base_request, point))
-            self._emit_log(f"  [SQLi Time-Based] → '{param_name}'")
-            vulnerabilities.extend(self._check_time_based_sqli(base_request, point))
-            self._emit_log(f"  [Command Injection] → '{param_name}'")
-            vulnerabilities.extend(self._check_command_injection(base_request, point))
-            self._emit_log(f"  [XSS] → '{param_name}'")
-            vulnerabilities.extend(self._check_xss(base_request, point))
-            self._emit_log(f"  [Path Traversal] → '{param_name}'")
-            vulnerabilities.extend(self._check_path_traversal(base_request, point))
+            module_vulnerabilities = self._run_scan_modules(base_request)
+            if module_vulnerabilities:
+                vulnerabilities.extend(module_vulnerabilities)
 
-        module_vulnerabilities = self._run_scan_modules(base_request)
-        if module_vulnerabilities:
-            vulnerabilities.extend(module_vulnerabilities)
+            unique_vulns = [dict(t) for t in {tuple(d.items()) for d in vulnerabilities}]
+            self._emit_log(f"--- SCANNER DEBUG: Total de vulnerabilidades únicas encontradas: {len(unique_vulns)}")
 
-        unique_vulns = [dict(t) for t in {tuple(d.items()) for d in vulnerabilities}]
-        log.info(f"--- SCANNER DEBUG: Total de vulnerabilidades únicas encontradas: {len(unique_vulns)}")
+            if unique_vulns:
+                log.warning(f"{self._current_scan_label or ''} {len(unique_vulns)} vulnerabilidades ativas encontradas para {base_request['url']}".strip())
 
-        if unique_vulns:
-            log.warning(f"{len(unique_vulns)} vulnerabilidades ativas encontradas para {base_request['url']}")
-
-        return unique_vulns
+            return unique_vulns
+        finally:
+            self._current_scan_label = previous_scan_label
