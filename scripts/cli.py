@@ -106,6 +106,24 @@ from src.core.oast_client import OASTClient
 from src.core.campaign import build_campaign, campaign_routes
 
 
+CAMPAIGN_SCAN_TYPES = {
+    "sqli": (["SqlInjectionModule"], ["SQLI"]),
+    "xss": (["XssModule"], ["XSS"]),
+    "command": ([], ["COMMAND"]),
+    "ssti": (["SstiModule"], []),
+    "lfi": (["LfiModule"], ["LFI"]),
+    "open-redirect": (["OpenRedirectModule"], []),
+    "header-injection": (["HeaderInjectionModule"], []),
+    "idor": (["IdorModule"], []),
+}
+
+CAMPAIGN_INSERTION_LOCATIONS = {
+    "body": ["BODY"],
+    "body-query": ["BODY", "QUERY"],
+    "all": None,
+}
+
+
 @cli.command('toggle')
 @click.argument('index', type=int)
 def toggle_rule(index):
@@ -316,7 +334,26 @@ def _scan_label(index: int, total: int, entry: dict, prefix: str = "Scan") -> st
     return f"[{prefix} {index}/{total} ID {source_id} {entry.get('method', '')} {entry.get('url', '')}]"
 
 
-def _scan_campaign_entries(entries, run_passive: bool, run_active: bool, limit: int | None = None):
+def _campaign_scan_controls(scan_types: str, insertion_locations: str):
+    enabled_modules = []
+    enabled_builtin_checks = []
+    for item in [part.strip().lower() for part in (scan_types or "").split(",") if part.strip()]:
+        modules, builtin = CAMPAIGN_SCAN_TYPES.get(item, ([], []))
+        enabled_modules.extend(modules)
+        enabled_builtin_checks.extend(builtin)
+    locations = CAMPAIGN_INSERTION_LOCATIONS.get((insertion_locations or "body").lower(), ["BODY"])
+    return enabled_modules, enabled_builtin_checks, locations
+
+
+def _scan_campaign_entries(
+    entries,
+    run_passive: bool,
+    run_active: bool,
+    limit: int | None = None,
+    enabled_modules=None,
+    enabled_builtin_checks=None,
+    insertion_locations=None,
+):
     matches = list(entries or [])
     if limit is not None:
         matches = matches[:max(1, limit)]
@@ -340,6 +377,9 @@ def _scan_campaign_entries(entries, run_passive: bool, run_active: bool, limit: 
         if active:
             base_request = _entry_to_base_request(entry)
             base_request["_scan_label"] = label
+            base_request["_enabled_modules"] = enabled_modules
+            base_request["_enabled_builtin_checks"] = enabled_builtin_checks
+            base_request["_injection_locations"] = insertion_locations
             active_vulns = active.scan_request(base_request)
             total_added += _merge_vulns(entry, active_vulns)
 
@@ -500,10 +540,12 @@ def campaign_import(source_file, out_file):
 @click.option('--file', 'campaign_file', default="logs/campaign.json", show_default=True, help="Arquivo da campanha.")
 @click.option('--active/--no-active', default=True, show_default=True, help="Executa scanner ativo.")
 @click.option('--passive/--no-passive', default=True, show_default=True, help="Executa scanner passivo.")
+@click.option('--types', 'scan_types', default="sqli,xss", show_default=True, help="Tipos ativos: sqli,xss,command,ssti,lfi,open-redirect,header-injection,idor.")
+@click.option('--params', 'insertion_locations', default="body", show_default=True, type=click.Choice(["body", "body-query", "all"]), help="Pontos de teste do scan ativo.")
 @click.option('--limit', default=None, type=int, help="Limite de rotas a escanear.")
 @click.option('--history-out', default="logs/campaign_history.json", show_default=True, help="Historico de saida com achados.")
 @click.option('--report', 'report_file', default=None, help="Relatorio Markdown opcional.")
-def campaign_scan(campaign_file, active, passive, limit, history_out, report_file):
+def campaign_scan(campaign_file, active, passive, scan_types, insertion_locations, limit, history_out, report_file):
     """Executa scan em lote nas rotas testaveis salvas na campanha."""
     if not active and not passive:
         click.echo("Nada para executar: habilite --active ou --passive.")
@@ -520,7 +562,20 @@ def campaign_scan(campaign_file, active, passive, limit, history_out, report_fil
         click.echo("Campanha sem rotas testaveis.")
         return
 
-    tested, total_added = _scan_campaign_entries(routes, run_passive=passive, run_active=active, limit=limit)
+    enabled_modules, enabled_builtin_checks, locations = _campaign_scan_controls(scan_types, insertion_locations)
+    if active and not enabled_modules and not enabled_builtin_checks:
+        click.echo("Nenhum tipo ativo selecionado. Use --types sqli,xss ou desabilite --active.")
+        return
+
+    tested, total_added = _scan_campaign_entries(
+        routes,
+        run_passive=passive,
+        run_active=active,
+        limit=limit,
+        enabled_modules=enabled_modules,
+        enabled_builtin_checks=enabled_builtin_checks,
+        insertion_locations=locations,
+    )
     _save_json(history_out, routes)
     _save_json(campaign_file, campaign)
 

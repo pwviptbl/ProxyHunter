@@ -1,10 +1,13 @@
 import json
 import os
+from collections import Counter
+from datetime import datetime
 
 from PySide6.QtCore import QAbstractTableModel, QModelIndex, Qt, QThread, Signal
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
+    QComboBox,
     QFileDialog,
     QGroupBox,
     QHBoxLayout,
@@ -28,18 +31,72 @@ from src.core.history import RequestHistory
 from src.core.scanner import VulnerabilityScanner
 
 
+SCAN_TYPE_OPTIONS = {
+    "SQLi": {
+        "modules": ["SqlInjectionModule"],
+        "builtin": ["SQLI"],
+    },
+    "XSS": {
+        "modules": ["XssModule"],
+        "builtin": ["XSS"],
+    },
+    "Command": {
+        "modules": [],
+        "builtin": ["COMMAND"],
+    },
+    "SSTI": {
+        "modules": ["SstiModule"],
+        "builtin": [],
+    },
+    "LFI": {
+        "modules": ["LfiModule"],
+        "builtin": ["LFI"],
+    },
+    "Open Redirect": {
+        "modules": ["OpenRedirectModule"],
+        "builtin": [],
+    },
+    "Header Injection": {
+        "modules": ["HeaderInjectionModule"],
+        "builtin": [],
+    },
+    "IDOR": {
+        "modules": ["IdorModule"],
+        "builtin": [],
+    },
+}
+
+INSERTION_LOCATION_OPTIONS = {
+    "Body": ["BODY"],
+    "Body + Query": ["BODY", "QUERY"],
+    "Todos": None,
+}
+
+
 class CampaignScanWorker(QThread):
     route_started = Signal(int, int, str)
     route_done = Signal(dict, list)
     log_message = Signal(str)
     finished_summary = Signal(int, int)
 
-    def __init__(self, routes, active_scanner: ActiveScanner, run_passive=True, run_active=True):
+    def __init__(
+        self,
+        routes,
+        active_scanner: ActiveScanner,
+        run_passive=True,
+        run_active=True,
+        enabled_modules=None,
+        enabled_builtin_checks=None,
+        insertion_locations=None,
+    ):
         super().__init__()
         self.routes = routes
         self.active_scanner = active_scanner
         self.run_passive = run_passive
         self.run_active = run_active
+        self.enabled_modules = enabled_modules
+        self.enabled_builtin_checks = enabled_builtin_checks
+        self.insertion_locations = insertion_locations
         self.passive_scanner = VulnerabilityScanner() if run_passive else None
 
     def run(self):
@@ -70,6 +127,9 @@ class CampaignScanWorker(QThread):
                         "headers": route.get("request_headers", {}) or route.get("headers", {}) or {},
                         "body": route.get("request_body", "") or route.get("body", "") or "",
                         "_scan_label": label,
+                        "_enabled_modules": self.enabled_modules,
+                        "_enabled_builtin_checks": self.enabled_builtin_checks,
+                        "_injection_locations": self.insertion_locations,
                     }
                     vulnerabilities.extend(self.active_scanner.scan_request(request_data) or [])
 
@@ -161,6 +221,10 @@ class CampaignTab(QWidget):
         export_button.clicked.connect(self.export_campaign)
         actions.addWidget(export_button)
 
+        report_button = QPushButton("Relatório")
+        report_button.clicked.connect(self.generate_report)
+        actions.addWidget(report_button)
+
         remove_button = QPushButton("Excluir Selecionado")
         remove_button.clicked.connect(self.remove_selected_route)
         actions.addWidget(remove_button)
@@ -188,6 +252,24 @@ class CampaignTab(QWidget):
 
         actions.addStretch()
         box.addLayout(actions)
+
+        scan_options = QHBoxLayout()
+        scan_options.addWidget(QLabel("Tipos ativos:"))
+        self.scan_type_checkboxes = {}
+        for label in SCAN_TYPE_OPTIONS.keys():
+            checkbox = QCheckBox(label)
+            checkbox.setChecked(label in ("SQLi", "XSS"))
+            self.scan_type_checkboxes[label] = checkbox
+            scan_options.addWidget(checkbox)
+
+        scan_options.addWidget(QLabel("Parametros:"))
+        self.insertion_location_combo = QComboBox()
+        self.insertion_location_combo.addItems(list(INSERTION_LOCATION_OPTIONS.keys()))
+        self.insertion_location_combo.setCurrentText("Body")
+        scan_options.addWidget(self.insertion_location_combo)
+
+        scan_options.addStretch()
+        box.addLayout(scan_options)
 
         self.status_label = QLabel("Sem campanha carregada.")
         box.addWidget(self.status_label)
@@ -311,6 +393,97 @@ class CampaignTab(QWidget):
             return
         QMessageBox.information(self, "Exportar", f"Campanha exportada em:\n{path}")
 
+    def generate_report(self):
+        if not self.campaign:
+            QMessageBox.information(self, "Relatório", "Nao ha campanha para gerar relatório.")
+            return
+
+        default_name = f"relatorio_{self.campaign.get('name', 'campanha')}.md".replace("/", "_")
+        path, _ = QFileDialog.getSaveFileName(self, "Salvar relatório da campanha", os.path.join("reports", default_name), "Markdown (*.md)")
+        if not path:
+            return
+
+        try:
+            directory = os.path.dirname(path)
+            if directory:
+                os.makedirs(directory, exist_ok=True)
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(self._build_markdown_report())
+        except Exception as exc:
+            QMessageBox.critical(self, "Relatório", f"Falha ao gerar relatório: {exc}")
+            return
+
+        QMessageBox.information(self, "Relatório", f"Relatório salvo em:\n{path}")
+
+    def _build_markdown_report(self):
+        routes = campaign_routes(self.campaign or {})
+        vulnerabilities = []
+        for route in routes:
+            for vuln in route.get("vulnerabilities", []) or []:
+                item = dict(vuln)
+                item.setdefault("url", route.get("url", "N/A"))
+                item.setdefault("method", route.get("method", "N/A"))
+                vulnerabilities.append(item)
+
+        severity_counts = Counter(v.get("severity", "Unknown") for v in vulnerabilities)
+        type_counts = Counter(v.get("type", "Unknown") for v in vulnerabilities)
+        method_counts = Counter(route.get("method", "N/A") for route in routes)
+        status_counts = Counter(str(route.get("status", "N/A")) for route in routes)
+
+        lines = [
+            "# Relatorio de Campanha - ProxyHunter",
+            "",
+            f"- Campanha: {self.campaign.get('name', 'N/A')}",
+            f"- Gerado em: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+            f"- Rotas testaveis: {len(routes)}",
+            f"- Vulnerabilidades: {len(vulnerabilities)}",
+            "",
+            "## Resumo",
+            "",
+            f"- Metodos: {self._format_counter(method_counts)}",
+            f"- Status: {self._format_counter(status_counts)}",
+            f"- Severidades: {self._format_counter(severity_counts) if vulnerabilities else 'nenhuma'}",
+            f"- Tipos: {self._format_counter(type_counts) if vulnerabilities else 'nenhum'}",
+            "",
+            "## Achados",
+            "",
+        ]
+
+        if not vulnerabilities:
+            lines.append("Nenhuma vulnerabilidade registrada na campanha.")
+        else:
+            severity_order = ["Critical", "High", "Medium", "Low", "Info", "Unknown"]
+            for severity in severity_order:
+                items = [v for v in vulnerabilities if v.get("severity", "Unknown") == severity]
+                if not items:
+                    continue
+                lines.extend([f"### {severity}", ""])
+                for vuln in items:
+                    lines.append(f"- **{vuln.get('type', 'Unknown')}**")
+                    lines.append(f"  - Metodo: `{vuln.get('method', 'N/A')}`")
+                    lines.append(f"  - URL: `{vuln.get('url', 'N/A')}`")
+                    lines.append(f"  - Origem: `{vuln.get('source', 'N/A')}`")
+                    if vuln.get("parameter") or vuln.get("location"):
+                        lines.append(f"  - Parametro: `{vuln.get('parameter', 'N/A')}` (`{vuln.get('location', 'N/A')}`)")
+                    if vuln.get("description"):
+                        lines.append(f"  - Descricao: {vuln.get('description')}")
+                    if vuln.get("evidence"):
+                        lines.append(f"  - Evidencia: `{str(vuln.get('evidence'))[:500]}`")
+                    lines.append("")
+
+        lines.extend(["", "## Rotas Testadas", ""])
+        for route in routes:
+            vuln_count = len(route.get("vulnerabilities", []) or [])
+            lines.append(f"- `{route.get('method', '')}` `{route.get('url', '')}` | Status: `{route.get('status', '')}` | Achados: `{vuln_count}`")
+
+        return "\n".join(lines).strip() + "\n"
+
+    @staticmethod
+    def _format_counter(counter):
+        if not counter:
+            return "nenhum"
+        return ", ".join(f"{key}: {count}" for key, count in counter.most_common())
+
     def remove_selected_route(self):
         row = self._selected_source_row()
         if row is None:
@@ -368,11 +541,27 @@ class CampaignTab(QWidget):
             if not automatic:
                 QMessageBox.information(self, "Scan", "Habilite scan passivo ou ativo.")
             return False
+        enabled_modules, enabled_builtin_checks = self._selected_scan_controls()
+        if run_active and not enabled_modules and not enabled_builtin_checks:
+            if not automatic:
+                QMessageBox.information(self, "Scan", "Selecione ao menos um tipo ativo, como SQLi ou XSS.")
+            else:
+                self.status_label.setText("Scan simultaneo aguardando: selecione ao menos um tipo ativo.")
+            return False
 
         self.auto_scan_running = automatic
         if not automatic:
             self.details_text.clear()
-        self.scan_worker = CampaignScanWorker(routes, self.active_scanner, run_passive, run_active)
+        insertion_locations = INSERTION_LOCATION_OPTIONS.get(self.insertion_location_combo.currentText())
+        self.scan_worker = CampaignScanWorker(
+            routes,
+            self.active_scanner,
+            run_passive,
+            run_active,
+            enabled_modules=enabled_modules,
+            enabled_builtin_checks=enabled_builtin_checks,
+            insertion_locations=insertion_locations,
+        )
         self.scan_worker.route_started.connect(self._on_route_started)
         self.scan_worker.route_done.connect(self._on_route_done)
         self.scan_worker.log_message.connect(self._append_log)
@@ -460,6 +649,17 @@ class CampaignTab(QWidget):
         metadata = route.get("campaign_metadata") or {}
         return metadata.get("signature")
 
+    def _selected_scan_controls(self):
+        enabled_modules = []
+        enabled_builtin_checks = []
+        for label, checkbox in self.scan_type_checkboxes.items():
+            if not checkbox.isChecked():
+                continue
+            option = SCAN_TYPE_OPTIONS[label]
+            enabled_modules.extend(option["modules"])
+            enabled_builtin_checks.extend(option["builtin"])
+        return enabled_modules, enabled_builtin_checks
+
     def _append_log(self, text):
         self.details_text.append(text)
         sb = self.details_text.verticalScrollBar()
@@ -492,7 +692,13 @@ class CampaignTab(QWidget):
         if vulns:
             text.extend(["", "Achados:"])
             for vuln in vulns:
-                text.append(f"- [{vuln.get('severity')}] {vuln.get('type')} - {vuln.get('evidence', '')}")
+                text.append(f"- [{vuln.get('severity')}] {vuln.get('type')}")
+                if vuln.get("parameter") or vuln.get("location"):
+                    text.append(f"  Parametro: {vuln.get('parameter', 'N/A')} ({vuln.get('location', 'N/A')})")
+                if vuln.get("description"):
+                    text.append(f"  Descricao: {vuln.get('description')}")
+                if vuln.get("evidence"):
+                    text.append(f"  Evidencia/Payload: {vuln.get('evidence')}")
         self.details_text.setPlainText("\n".join(text))
 
     def _refresh_campaign_view(self, keep_details=False):

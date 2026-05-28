@@ -23,7 +23,7 @@ ZIP e outros recursos estaticos.
 5. Navegue pelos menus, frames e rotinas do sistema.
 6. Clique em `Finalizar Captura`.
 7. Revise a lista de rotas testaveis.
-8. Use `Exportar`, `Importar`, `Scan Selecionado` ou `Scan Todos`.
+8. Use `Exportar`, `Importar`, `Scan Selecionado`, `Scan Todos` ou `Relatorio`.
 
 Antes do scan/exportacao, use `Excluir Selecionado` ou o menu de contexto da
 tabela para remover rotas auxiliares repetidas, como login, frames comuns ou
@@ -32,6 +32,15 @@ endpoints de apoio que nao fazem parte do modulo em teste.
 Se marcar `Simultaneo`, cada rota testavel nova entra em uma fila e o scanner
 vai processando em ordem enquanto a navegacao continua. Use os checkboxes
 `Passivo` e `Ativo` para controlar quais testes entram nessa fila.
+
+Em `Tipos ativos`, selecione apenas os testes necessarios para a campanha, por
+exemplo `SQLi` e `XSS`, ou somente `SQLi`. Em `Parametros`, o padrao `Body`
+testa apenas parametros enviados no corpo da requisicao, evitando headers,
+cookies, Authorization, Referer e cabecalhos de navegador. Use `Body + Query`
+quando tambem quiser testar query string, ou `Todos` para o comportamento amplo.
+
+O botao `Relatorio` gera um Markdown da campanha com resumo, achados por
+severidade/tipo e rotas testadas.
 
 ### Pela CLI
 
@@ -72,6 +81,8 @@ menus, frames e rotinas do sistema e pressione `Ctrl+C` para finalizar.
 ```bash
 ./.venv/bin/python scripts/cli.py campaign scan \
   --file logs/ecidade-campaign.json \
+  --types sqli,xss \
+  --params body \
   --history-out logs/ecidade-campaign-history.json \
   --report reports/ecidade-campaign.md
 ```

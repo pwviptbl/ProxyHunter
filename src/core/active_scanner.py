@@ -324,22 +324,24 @@ class ActiveScanner:
     def _derive_injection_points_for_modules(self, base_request: Dict[str, Any]) -> List[Dict[str, Any]]:
         points: List[Dict[str, Any]] = []
         point_id = 1
+        allowed_locations = self._allowed_injection_locations(base_request)
 
         url = base_request.get('url', '')
         headers = base_request.get('headers', {}) or {}
         body = base_request.get('body', '') or ''
 
         parsed_url = urlparse(url)
-        query_params = parse_qs(parsed_url.query, keep_blank_values=True)
-        for name, values in query_params.items():
-            for value in values:
-                points.append({
-                    'id': point_id,
-                    'location': 'QUERY',
-                    'parameter_name': name,
-                    'original_value': value,
-                })
-                point_id += 1
+        if self._location_allowed("QUERY", allowed_locations):
+            query_params = parse_qs(parsed_url.query, keep_blank_values=True)
+            for name, values in query_params.items():
+                for value in values:
+                    points.append({
+                        'id': point_id,
+                        'location': 'QUERY',
+                        'parameter_name': name,
+                        'original_value': value,
+                    })
+                    point_id += 1
 
         content_type = ''
         for key, value in headers.items():
@@ -352,7 +354,7 @@ class ActiveScanner:
         else:
             body_text = body
 
-        if 'application/x-www-form-urlencoded' in (content_type or '') and body_text:
+        if 'application/x-www-form-urlencoded' in (content_type or '') and body_text and self._location_allowed("BODY_FORM", allowed_locations):
             form_params = parse_qs(body_text, keep_blank_values=True)
             for name, values in form_params.items():
                 for value in values:
@@ -364,7 +366,7 @@ class ActiveScanner:
                     })
                     point_id += 1
 
-        elif 'multipart/form-data' in (content_type or '') and body_text:
+        elif 'multipart/form-data' in (content_type or '') and body_text and self._location_allowed("BODY_FORM", allowed_locations):
             boundary_match = re.search(r'boundary=([^;\s]+)', content_type, re.IGNORECASE)
             if boundary_match:
                 boundary = boundary_match.group(1).strip('"')
@@ -379,7 +381,7 @@ class ActiveScanner:
                         })
                         point_id += 1
 
-        if 'application/json' in (content_type or '') and body_text:
+        if 'application/json' in (content_type or '') and body_text and self._location_allowed("BODY_JSON", allowed_locations):
             try:
                 json_body = json.loads(body_text)
                 for item in self._iter_json_points(json_body):
@@ -393,41 +395,65 @@ class ActiveScanner:
             except Exception:
                 pass
 
-        exclude_headers = {
-            'content-length', 'host', 'connection', 'accept', 'accept-encoding',
-            'accept-language', 'user-agent', 'cache-control', 'pragma'
-        }
-        for name, value in headers.items():
-            if name.lower() in exclude_headers:
-                continue
-            points.append({
-                'id': point_id,
-                'location': 'HEADER',
-                'parameter_name': name,
-                'original_value': value,
-            })
-            point_id += 1
-
-        cookie_header = None
-        for name, value in headers.items():
-            if name.lower() == 'cookie':
-                cookie_header = value
-                break
-        if cookie_header:
-            cookie_parts = [c.strip() for c in cookie_header.split(';') if '=' in c]
-            for part in cookie_parts:
-                key, value = part.split('=', 1)
+        if self._location_allowed("HEADER", allowed_locations):
+            exclude_headers = {
+                'content-length', 'host', 'connection', 'accept', 'accept-encoding',
+                'accept-language', 'user-agent', 'cache-control', 'pragma',
+                'authorization', 'cookie', 'referer', 'origin', 'proxy-connection',
+                'sec-fetch-dest', 'sec-fetch-mode', 'sec-fetch-site', 'sec-fetch-user',
+                'sec-ch-ua', 'sec-ch-ua-mobile', 'sec-ch-ua-platform',
+            }
+            for name, value in headers.items():
+                if name.lower() in exclude_headers:
+                    continue
                 points.append({
                     'id': point_id,
-                    'location': 'COOKIE',
-                    'parameter_name': key.strip(),
-                    'original_value': value.strip(),
+                    'location': 'HEADER',
+                    'parameter_name': name,
+                    'original_value': value,
                 })
                 point_id += 1
 
+        if self._location_allowed("COOKIE", allowed_locations):
+            cookie_header = None
+            for name, value in headers.items():
+                if name.lower() == 'cookie':
+                    cookie_header = value
+                    break
+            if cookie_header:
+                cookie_parts = [c.strip() for c in cookie_header.split(';') if '=' in c]
+                for part in cookie_parts:
+                    key, value = part.split('=', 1)
+                    points.append({
+                        'id': point_id,
+                        'location': 'COOKIE',
+                        'parameter_name': key.strip(),
+                        'original_value': value.strip(),
+                    })
+                    point_id += 1
+
         return points
 
-    def _module_vuln_to_dict(self, vuln: Any, base_request: Dict[str, Any]) -> Dict[str, Any]:
+    def _allowed_injection_locations(self, base_request: Dict[str, Any]):
+        if "_injection_locations" in base_request:
+            locations = base_request.get("_injection_locations")
+        else:
+            locations = base_request.get("injection_locations")
+        if not locations:
+            return None
+        return {str(item).upper() for item in locations}
+
+    def _location_allowed(self, location: str, allowed_locations) -> bool:
+        if not allowed_locations:
+            return True
+        location = str(location).upper()
+        if location in allowed_locations:
+            return True
+        if location.startswith("BODY_") and "BODY" in allowed_locations:
+            return True
+        return False
+
+    def _module_vuln_to_dict(self, vuln: Any, base_request: Dict[str, Any], injection_point: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         evidence = vuln.evidence
         if isinstance(evidence, (dict, list)):
             evidence_text = json.dumps(evidence, ensure_ascii=True, default=str)
@@ -441,6 +467,8 @@ class ActiveScanner:
             'method': base_request.get('method', 'N/A'),
             'description': vuln.description,
             'evidence': evidence_text,
+            'parameter': (injection_point or {}).get('parameter_name'),
+            'location': (injection_point or {}).get('location'),
         }
 
     def _run_scan_modules(self, base_request: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -449,21 +477,70 @@ class ActiveScanner:
         request_node = self._build_request_node_for_modules(base_request)
         injection_points = self._derive_injection_points_for_modules(base_request)
         results: List[Dict[str, Any]] = []
+        enabled_modules = self._enabled_scan_modules_for_request(base_request)
 
         total_points = len(injection_points)
         for point_index, point in enumerate(injection_points, start=1):
             for module in self.scan_modules:
                 try:
+                    if enabled_modules is not None and module.__class__.__name__ not in enabled_modules:
+                        continue
                     msg = f"[Módulo {point_index}/{total_points}] {module.__class__.__name__} → param: {point.get('parameter_name')} (location: {point.get('location')})"
                     self._emit_log(msg)
                     vulns = module.run_test(request_node, point, self.oast_client)
                     for vuln in vulns:
-                        results.append(self._module_vuln_to_dict(vuln, base_request))
+                        vuln_dict = self._module_vuln_to_dict(vuln, base_request, point)
+                        results.append(vuln_dict)
                 except Exception as e:
                     log.debug(f"Falha no modulo {module.__class__.__name__}: {e}")
                     continue
 
         return results
+
+    def _emit_vulnerability_log(self, vuln: Dict[str, Any]):
+        vtype = vuln.get('type', 'N/A')
+        severity = vuln.get('severity', 'N/A')
+        parameter = vuln.get('parameter') or vuln.get('param') or vuln.get('parameter_name')
+        location = vuln.get('location')
+        evidence = vuln.get('evidence', '')
+        description = vuln.get('description', '')
+
+        parts = [f"!!! ACHADO [{severity}] {vtype}"]
+        if parameter:
+            parts.append(f"param={parameter}")
+        if location:
+            parts.append(f"location={location}")
+        self._emit_log(" | ".join(parts))
+
+        if evidence:
+            self._emit_log(f"    Evidencia/Payload: {str(evidence)[:500]}")
+        if description:
+            self._emit_log(f"    Descricao: {str(description)[:500]}")
+
+    def _enabled_scan_modules_for_request(self, base_request: Dict[str, Any]):
+        if "_enabled_modules" in base_request:
+            modules = base_request.get("_enabled_modules")
+        else:
+            modules = base_request.get("enabled_modules")
+        if modules is None:
+            return None
+        if isinstance(modules, dict):
+            return {str(name) for name, enabled in modules.items() if enabled}
+        return {str(name) for name in modules}
+
+    def _enabled_builtin_checks_for_request(self, base_request: Dict[str, Any]):
+        if "_enabled_builtin_checks" in base_request:
+            checks = base_request.get("_enabled_builtin_checks")
+        else:
+            checks = base_request.get("enabled_builtin_checks")
+        if checks is None:
+            return None
+        if isinstance(checks, dict):
+            return {str(name) for name, enabled in checks.items() if enabled}
+        return {str(name) for name in checks}
+
+    def _builtin_check_enabled(self, enabled_checks, name: str) -> bool:
+        return enabled_checks is None or name in enabled_checks
 
     def _send_modified_request(self, original_request: Dict, insertion_point: Dict, payload: str, context_tag: str = None) -> requests.Response:
         """Envia uma requisição modificada, com suporte a TOR delegado ao _send_request."""
@@ -1263,7 +1340,14 @@ class ActiveScanner:
             self._emit_log(f"--- SCANNER DEBUG: Body recebido: {base_request.get('body')}")
 
             insertion_points = self._get_insertion_points(base_request)
+            allowed_locations = self._allowed_injection_locations(base_request)
+            if allowed_locations:
+                insertion_points = [
+                    point for point in insertion_points
+                    if self._location_allowed("QUERY" if point.get("type") == "url" else "BODY", allowed_locations)
+                ]
             self._emit_log(f"--- SCANNER DEBUG: Pontos de inserção encontrados: {insertion_points}")
+            enabled_builtin_checks = self._enabled_builtin_checks_for_request(base_request)
 
             if not insertion_points and base_request.get('method', '').upper() == 'POST':
                 headers = {k.lower(): v for k, v in base_request.get('headers', {}).items()}
@@ -1283,20 +1367,24 @@ class ActiveScanner:
             for point_index, point in enumerate(insertion_points, start=1):
                 param_name = point.get('name')
                 self._emit_log(f"▶ Ponto de inserção {point_index}/{total_insertion_points}: '{param_name}' (type={point.get('type')}, value={repr(str(point.get('value', ''))[:40])})")
-                self._emit_log(f"  [SQLi Login Bypass] → '{param_name}'")
-                vulnerabilities.extend(self._check_login_sqli(base_request, point))
-                self._emit_log(f"  [SQLi Error/Union/Stacked] → '{param_name}'")
-                vulnerabilities.extend(self._check_sql_injection(base_request, point))
-                self._emit_log(f"  [SQLi Boolean-Based] → '{param_name}'")
-                vulnerabilities.extend(self._check_boolean_sqli(base_request, point))
-                self._emit_log(f"  [SQLi Time-Based] → '{param_name}'")
-                vulnerabilities.extend(self._check_time_based_sqli(base_request, point))
-                self._emit_log(f"  [Command Injection] → '{param_name}'")
-                vulnerabilities.extend(self._check_command_injection(base_request, point))
-                self._emit_log(f"  [XSS] → '{param_name}'")
-                vulnerabilities.extend(self._check_xss(base_request, point))
-                self._emit_log(f"  [Path Traversal] → '{param_name}'")
-                vulnerabilities.extend(self._check_path_traversal(base_request, point))
+                if self._builtin_check_enabled(enabled_builtin_checks, "SQLI"):
+                    self._emit_log(f"  [SQLi Login Bypass] → '{param_name}'")
+                    vulnerabilities.extend(self._check_login_sqli(base_request, point))
+                    self._emit_log(f"  [SQLi Error/Union/Stacked] → '{param_name}'")
+                    vulnerabilities.extend(self._check_sql_injection(base_request, point))
+                    self._emit_log(f"  [SQLi Boolean-Based] → '{param_name}'")
+                    vulnerabilities.extend(self._check_boolean_sqli(base_request, point))
+                    self._emit_log(f"  [SQLi Time-Based] → '{param_name}'")
+                    vulnerabilities.extend(self._check_time_based_sqli(base_request, point))
+                if self._builtin_check_enabled(enabled_builtin_checks, "COMMAND"):
+                    self._emit_log(f"  [Command Injection] → '{param_name}'")
+                    vulnerabilities.extend(self._check_command_injection(base_request, point))
+                if self._builtin_check_enabled(enabled_builtin_checks, "XSS"):
+                    self._emit_log(f"  [XSS] → '{param_name}'")
+                    vulnerabilities.extend(self._check_xss(base_request, point))
+                if self._builtin_check_enabled(enabled_builtin_checks, "LFI"):
+                    self._emit_log(f"  [Path Traversal] → '{param_name}'")
+                    vulnerabilities.extend(self._check_path_traversal(base_request, point))
 
             module_vulnerabilities = self._run_scan_modules(base_request)
             if module_vulnerabilities:
@@ -1306,6 +1394,8 @@ class ActiveScanner:
             self._emit_log(f"--- SCANNER DEBUG: Total de vulnerabilidades únicas encontradas: {len(unique_vulns)}")
 
             if unique_vulns:
+                for vuln in unique_vulns:
+                    self._emit_vulnerability_log(vuln)
                 log.warning(f"{self._current_scan_label or ''} {len(unique_vulns)} vulnerabilidades ativas encontradas para {base_request['url']}".strip())
 
             return unique_vulns
