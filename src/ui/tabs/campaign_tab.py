@@ -3,7 +3,7 @@ import os
 from collections import Counter
 from datetime import datetime
 
-from PySide6.QtCore import QAbstractTableModel, QModelIndex, Qt, QThread, Signal
+from PySide6.QtCore import QAbstractTableModel, QModelIndex, Qt, QThread, Signal, QTimer
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
@@ -179,6 +179,8 @@ class CampaignTab(QWidget):
         self.auto_scan_queue = []
         self.auto_scan_signatures = set()
         self.auto_scan_running = False
+        self.autosave_path = os.path.join("logs", "campaign_autosave.json")
+        self.pending_log_lines = []
 
         layout = QVBoxLayout(self)
         self._setup_capture_section(layout)
@@ -188,6 +190,11 @@ class CampaignTab(QWidget):
         self._setup_table(splitter)
         self._setup_details(splitter)
         splitter.setSizes([430, 260])
+
+        self.log_flush_timer = QTimer(self)
+        self.log_flush_timer.timeout.connect(self._flush_log_lines)
+        self.log_flush_timer.start(250)
+        self._load_autosave_campaign()
 
     def _setup_capture_section(self, layout):
         group = QGroupBox("Campanha")
@@ -319,6 +326,7 @@ class CampaignTab(QWidget):
                 scope=self._scope_terms(),
             )
             self._refresh_campaign_view()
+            self._autosave_campaign()
             self.capture_button.setText("Finalizar Captura")
             self.status_label.setText(f"Capturando a partir do ID {self.capture_start_id + 1}. Navegue pelo sistema e finalize.")
             return
@@ -328,6 +336,7 @@ class CampaignTab(QWidget):
         self.capture_button.setText("Iniciar Captura")
         entries = self.captured_entries or [e for e in self.history_manager.get_history() if e.get("id", 0) > start_id]
         self._build_campaign(entries)
+        self._autosave_campaign()
 
     def add_captured_entry(self, entry):
         """Atualiza a campanha em tempo real enquanto a captura esta ativa."""
@@ -342,6 +351,7 @@ class CampaignTab(QWidget):
             scope=self._scope_terms(),
         )
         self._refresh_campaign_view(keep_details=True)
+        self._autosave_campaign()
         if self.auto_scan_checkbox.isChecked():
             self._enqueue_auto_scan_routes()
 
@@ -353,6 +363,7 @@ class CampaignTab(QWidget):
         scope = self._scope_terms()
         self.campaign = build_campaign(entries, name=name, scope=scope)
         self._refresh_campaign_view()
+        self._autosave_campaign()
         if self.auto_scan_checkbox.isChecked():
             self._enqueue_auto_scan_routes()
 
@@ -373,6 +384,7 @@ class CampaignTab(QWidget):
         self.name_input.setText(str(campaign.get("name", "")))
         self.scope_input.setText(",".join(campaign.get("scope", []) or []))
         self._refresh_campaign_view()
+        self._autosave_campaign()
 
     def export_campaign(self):
         if not self.campaign:
@@ -417,9 +429,12 @@ class CampaignTab(QWidget):
 
     def _build_markdown_report(self):
         routes = campaign_routes(self.campaign or {})
+        allowed_sources = self._report_allowed_sources()
         vulnerabilities = []
         for route in routes:
             for vuln in route.get("vulnerabilities", []) or []:
+                if not self._vulnerability_source_allowed(vuln, allowed_sources):
+                    continue
                 item = dict(vuln)
                 item.setdefault("url", route.get("url", "N/A"))
                 item.setdefault("method", route.get("method", "N/A"))
@@ -436,6 +451,7 @@ class CampaignTab(QWidget):
             "",
             f"- Campanha: {self.campaign.get('name', 'N/A')}",
             f"- Gerado em: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+            f"- Filtro de origem: {self._report_source_label()}",
             f"- Rotas testaveis: {len(routes)}",
             f"- Vulnerabilidades: {len(vulnerabilities)}",
             "",
@@ -475,10 +491,38 @@ class CampaignTab(QWidget):
 
         lines.extend(["", "## Rotas Testadas", ""])
         for route in routes:
-            vuln_count = len(route.get("vulnerabilities", []) or [])
+            vuln_count = len([
+                vuln for vuln in (route.get("vulnerabilities", []) or [])
+                if self._vulnerability_source_allowed(vuln, allowed_sources)
+            ])
             lines.append(f"- `{route.get('method', '')}` `{route.get('url', '')}` | Status: `{route.get('status', '')}` | Achados: `{vuln_count}`")
 
         return "\n".join(lines).strip() + "\n"
+
+    def _report_allowed_sources(self):
+        sources = set()
+        if self.active_checkbox.isChecked():
+            sources.add("Active")
+            # Compatibilidade com campanhas antigas geradas antes de normalizar
+            # achados dos modulos ativos para source=Active.
+            sources.add("Module")
+        if self.passive_checkbox.isChecked():
+            sources.add("Passive")
+        return sources
+
+    def _report_source_label(self):
+        labels = []
+        if self.active_checkbox.isChecked():
+            labels.append("Active")
+        if self.passive_checkbox.isChecked():
+            labels.append("Passive")
+        return ", ".join(labels) if labels else "nenhum"
+
+    @staticmethod
+    def _vulnerability_source_allowed(vuln, allowed_sources):
+        if not allowed_sources:
+            return False
+        return (vuln.get("source") or "Unknown") in allowed_sources
 
     @staticmethod
     def _format_counter(counter):
@@ -507,6 +551,7 @@ class CampaignTab(QWidget):
         self.auto_scan_signatures.discard(signature)
         self._update_campaign_route_stats()
         self._refresh_campaign_view()
+        self._autosave_campaign()
 
     def _show_context_menu(self, pos):
         row = self._selected_source_row()
@@ -589,7 +634,7 @@ class CampaignTab(QWidget):
         self._refresh_campaign_view(keep_details=True)
         if route:
             self._sync_vulnerabilities_to_history(route, vulnerabilities)
-        self.refresh_vulnerabilities_requested.emit()
+        self._autosave_campaign()
 
     def _on_scan_finished(self, total, total_added):
         self.status_label.setText(f"Scan finalizado. Rotas processadas: {total}. Novos achados: {total_added}.")
@@ -683,9 +728,52 @@ class CampaignTab(QWidget):
         return enabled_modules, enabled_builtin_checks
 
     def _append_log(self, text):
-        self.details_text.append(text)
+        self.pending_log_lines.append(text)
+        if len(self.pending_log_lines) > 500:
+            self.pending_log_lines = self.pending_log_lines[-500:]
+
+    def _flush_log_lines(self):
+        if not self.pending_log_lines:
+            return
+        chunk = "\n".join(self.pending_log_lines[:80])
+        self.pending_log_lines = self.pending_log_lines[80:]
+        self.details_text.append(chunk)
         sb = self.details_text.verticalScrollBar()
         sb.setValue(sb.maximum())
+
+    def _autosave_campaign(self):
+        if not self.campaign:
+            return
+        try:
+            directory = os.path.dirname(self.autosave_path)
+            if directory:
+                os.makedirs(directory, exist_ok=True)
+            payload = dict(self.campaign)
+            payload["autosaved_at"] = datetime.now().isoformat(timespec="seconds")
+            temp_path = f"{self.autosave_path}.tmp"
+            with open(temp_path, "w", encoding="utf-8") as f:
+                json.dump(payload, f, indent=2, ensure_ascii=False)
+            os.replace(temp_path, self.autosave_path)
+        except Exception:
+            pass
+
+    def _load_autosave_campaign(self):
+        if not os.path.exists(self.autosave_path):
+            return
+        try:
+            with open(self.autosave_path, "r", encoding="utf-8") as f:
+                campaign = json.load(f)
+        except Exception:
+            return
+        if not isinstance(campaign, dict) or campaign.get("schema") != "proxyhunter.campaign":
+            return
+        self.campaign = campaign
+        self.name_input.setText(str(campaign.get("name", "")))
+        self.scope_input.setText(",".join(campaign.get("scope", []) or []))
+        self._refresh_campaign_view()
+        autosaved_at = campaign.get("autosaved_at")
+        if autosaved_at:
+            self.status_label.setText(f"Autosave restaurado de {autosaved_at}.")
 
     def _on_selection_changed(self, selected, deselected):
         row = self._selected_source_row()

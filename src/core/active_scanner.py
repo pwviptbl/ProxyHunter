@@ -486,7 +486,14 @@ class ActiveScanner:
             locations = base_request.get("injection_locations")
         if not locations:
             return None
-        return {str(item).upper() for item in locations}
+        normalized = {str(item).upper() for item in locations}
+        if (
+            base_request.get("method", "").upper() == "GET"
+            and "BODY" in normalized
+            and "QUERY" not in normalized
+        ):
+            normalized.add("QUERY")
+        return normalized
 
     def _location_allowed(self, location: str, allowed_locations) -> bool:
         if not allowed_locations:

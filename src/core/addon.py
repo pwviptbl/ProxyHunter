@@ -300,7 +300,12 @@ class InterceptAddon:
         
         # Escaneia a resposta em busca de vulnerabilidades e tecnologias
         vulnerabilities = []
-        if self.vulnerability_scanner and flow.response and self.config.is_in_scope(flow.request.pretty_url):
+        if (
+            self.vulnerability_scanner
+            and self.config.get_passive_scan_enabled()
+            and flow.response
+            and self.config.is_in_scope(flow.request.pretty_url)
+        ):
             vulnerabilities = self.vulnerability_scanner.scan_response(flow)
             
             # Preenche URL e método nas vulnerabilidades

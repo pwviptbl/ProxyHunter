@@ -1,9 +1,10 @@
 import asyncio
+import os
 import subprocess
 import sys
 import traceback
 from playwright.async_api import async_playwright, Playwright, Browser, Page
-from threading import Thread
+from threading import Lock, Thread
 import ctypes
 import platform
 
@@ -11,13 +12,16 @@ class BrowserManager:
     """
     Gerencia a instalação e o lançamento de um navegador Chromium pré-configurado.
     """
-    def __init__(self, proxy_port: int = 9507, on_install_start=None, on_install_finish=None):
+    def __init__(self, proxy_port: int = 9507, ui_queue=None):
         self.proxy_port = proxy_port
         self.browser: Browser | None = None
         self.page: Page | None = None
         self.playwright: Playwright | None = None
-        self.on_install_start = on_install_start
-        self.on_install_finish = on_install_finish
+        self.ui_queue = ui_queue
+        self.playwright_loop = None
+        self.browser_thread = None
+        self._lock = Lock()
+        self._launching = False
 
     def _get_screen_dimensions(self):
         """Obtém a largura e altura da tela principal."""
@@ -91,16 +95,14 @@ class BrowserManager:
 
     def _install_chromium(self):
         """Instala o Chromium usando o comando do Playwright."""
-        if self.on_install_start:
-            self.on_install_start()
+        self._notify_ui("browser_install_start")
         try:
             subprocess.run(
                 [sys.executable, "-m", "playwright", "install", "chromium"],
                 check=True, capture_output=True, text=True
             )
         finally:
-            if self.on_install_finish:
-                self.on_install_finish()
+            self._notify_ui("browser_install_finish")
 
     async def _launch_browser_async(self):
         """Lança o navegador de forma assíncrona."""
@@ -149,17 +151,28 @@ class BrowserManager:
 
             self.page.on("close", self.close_browser_sync)
             print("[DEBUG] Playwright: pronto.")
+            self._notify_ui("browser_launch_ready")
+            return True
 
 
         except Exception as e:
             print(f"[ERRO] Falha ao abrir o navegador: {e}")
             traceback.print_exc()
+            self._notify_ui("browser_launch_error", str(e))
+            await self._cleanup_after_launch_error()
+            return False
 
 
 
 
     def launch_browser(self):
         """Ponto de entrada síncrono para lançar o navegador."""
+        with self._lock:
+            if self._launching or (self.browser_thread and self.browser_thread.is_alive()):
+                print("[DEBUG] Playwright thread: lançamento ignorado, navegador já está em execução.")
+                return False
+            self._launching = True
+
         # O Playwright é assíncrono, então precisamos de um loop de eventos
         # para executá-lo a partir de um contexto síncrono (como o PySide6).
         def run_async():
@@ -169,21 +182,42 @@ class BrowserManager:
             asyncio.set_event_loop(loop)
             try:
                 print("[DEBUG] Playwright thread: iniciando loop de eventos")
-                loop.run_until_complete(self._launch_browser_async())
-                print("[DEBUG] Playwright thread: _launch_browser_async finalizado, executando loop forever")
-                loop.run_forever()
+                launched = loop.run_until_complete(self._launch_browser_async())
+                if launched:
+                    print("[DEBUG] Playwright thread: _launch_browser_async finalizado, executando loop forever")
+                    loop.run_forever()
             except Exception as e:
                 print(f"[DEBUG] Playwright thread: exceção não tratada: {e}")
                 traceback.print_exc()
+                self._notify_ui("browser_launch_error", str(e))
+            finally:
+                try:
+                    pending = asyncio.all_tasks(loop)
+                    for task in pending:
+                        task.cancel()
+                    if pending:
+                        loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+                except Exception:
+                    pass
+                loop.close()
+                with self._lock:
+                    self._launching = False
+                    self.browser_thread = None
+                    self.playwright_loop = None
+                self._notify_ui("browser_closed")
 
         thread = Thread(target=run_async, daemon=True)
+        self.browser_thread = thread
         thread.start()
+        return True
 
     def close_browser_sync(self, *args):
         """Fecha o navegador a partir de um contexto síncrono."""
-        if self.playwright:
+        if self.playwright or self.playwright_loop:
             # Usa o loop da thread do Playwright, se disponível
-            loop = getattr(self, 'playwright_loop', None) or asyncio.get_event_loop()
+            loop = self.playwright_loop
+            if not loop:
+                return
             print(f"[DEBUG] close_browser_sync: agendando _close_browser_async no loop {loop}")
             # Agende o fechamento de forma thread-safe
             loop.call_soon_threadsafe(lambda: asyncio.create_task(self._close_browser_async()))
@@ -205,9 +239,29 @@ class BrowserManager:
         if loop.is_running():
             loop.stop()
 
+    async def _cleanup_after_launch_error(self):
+        """Libera recursos quando o Chromium falha antes de ficar pronto."""
+        try:
+            if self.browser and not self.browser.is_closed():
+                await self.browser.close()
+        except Exception:
+            pass
+        try:
+            if self.playwright:
+                await self.playwright.stop()
+        except Exception:
+            pass
+        self.browser = None
+        self.page = None
+        self.playwright = None
+
     def close(self):
         """Ponto de entrada síncrono para fechar tudo."""
         self.close_browser_sync()
+
+    def _notify_ui(self, msg_type, data=None):
+        if self.ui_queue:
+            self.ui_queue.put({"type": msg_type, "data": data})
 
 if __name__ == '__main__':
     # Exemplo de uso

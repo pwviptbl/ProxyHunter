@@ -11,6 +11,7 @@ class ProxyControlWidget(QGroupBox):
     save_port_requested = Signal(str)
     launch_browser_requested = Signal()
     tor_toggled = Signal(bool)
+    passive_scan_toggled = Signal(bool)
 
     def __init__(self, initial_port: str):
         super().__init__("Controle do Proxy")
@@ -52,6 +53,11 @@ class ProxyControlWidget(QGroupBox):
         self.tor_checkbox.setToolTip("Roteia todas as requisições através da rede TOR para anonimato")
         self.tor_checkbox.stateChanged.connect(lambda state: self.tor_toggled.emit(state == 2))  # 2 = Checked
         control_layout.addWidget(self.tor_checkbox)
+
+        self.passive_scan_checkbox = QCheckBox("Scan Passivo")
+        self.passive_scan_checkbox.setToolTip("Executa o scanner passivo automaticamente nas respostas capturadas no histórico")
+        self.passive_scan_checkbox.stateChanged.connect(lambda state: self.passive_scan_toggled.emit(state == 2))
+        control_layout.addWidget(self.passive_scan_checkbox)
 
         # Navegador
         control_layout.addSpacing(20)
@@ -106,12 +112,34 @@ class ProxyControlWidget(QGroupBox):
         """Retorna se o TOR está habilitado."""
         return self.tor_checkbox.isChecked()
 
+    def set_passive_scan_enabled(self, enabled: bool):
+        """Define o estado da checkbox do scan passivo."""
+        self.passive_scan_checkbox.setChecked(enabled)
+
+    def get_passive_scan_enabled(self) -> bool:
+        """Retorna se o scan passivo está habilitado."""
+        return self.passive_scan_checkbox.isChecked()
+
     def set_browser_installing(self):
         """Atualiza a UI para o estado de instalação do navegador."""
         self.browser_button.setEnabled(False)
         self.browser_button.setText("Instalando Navegador...")
 
-    def set_browser_installed(self):
-        """Restaura a UI após a instalação do navegador."""
-        self.browser_button.setEnabled(True)
+    def set_browser_launching(self):
+        """Atualiza a UI enquanto o navegador esta abrindo."""
+        self.browser_button.setEnabled(False)
+        self.browser_button.setText("Abrindo Navegador...")
+
+    def set_browser_running(self):
+        """Atualiza a UI quando o navegador esta em execucao."""
+        self.browser_button.setEnabled(False)
+        self.browser_button.setText("Navegador Aberto")
+
+    def set_browser_idle(self, proxy_running: bool):
+        """Restaura a UI quando o navegador fecha ou falha."""
+        self.browser_button.setEnabled(proxy_running)
         self.browser_button.setText("Abrir Navegador")
+
+    def set_browser_installed(self):
+        """Compatibilidade com chamadas antigas."""
+        self.set_browser_idle(True)

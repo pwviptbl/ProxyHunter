@@ -54,16 +54,12 @@ class ProxyGUI(QMainWindow):
 
     proxy_stopped_signal = Signal()
     ui_update_signal = Signal(dict)
-    browser_install_start_signal = Signal()
-    browser_install_finish_signal = Signal()
 
     def __init__(self):
         super().__init__()
 
         self.proxy_stopped_signal.connect(self._set_proxy_stopped_state)
         self.ui_update_signal.connect(self._handle_ui_update)
-        self.browser_install_start_signal.connect(self._on_browser_install_start)
-        self.browser_install_finish_signal.connect(self._on_browser_install_finish)
 
         # Inicializa a lógica de negócio (backend)
         self.config = InterceptConfig()
@@ -78,12 +74,6 @@ class ProxyGUI(QMainWindow):
             oast_client=OASTClient(self.config),
             enabled_modules=self.config.get_active_scan_modules()
         )
-        self.browser_manager = BrowserManager(
-            proxy_port=self.config.get_port(),
-            on_install_start=self.browser_install_start_signal.emit,
-            on_install_finish=self.browser_install_finish_signal.emit
-        )
-
         # Estado da aplicação
         self.proxy_thread = None
         self.proxy_running = False
@@ -95,6 +85,10 @@ class ProxyGUI(QMainWindow):
         self.history.set_ui_queue(self.ui_queue)
         self.websocket_history.set_ui_queue(self.ui_queue)
         self.spider.set_ui_queue(self.ui_queue)
+        self.browser_manager = BrowserManager(
+            proxy_port=self.config.get_port(),
+            ui_queue=self.ui_queue
+        )
 
         self.setWindowTitle("ProxyHunter")
         screen = QGuiApplication.primaryScreen()
@@ -138,6 +132,7 @@ class ProxyGUI(QMainWindow):
         # 2. Cria e adiciona o widget de controle do proxy
         self.control_widget = ProxyControlWidget(str(self.config.get_port()))
         self.control_widget.set_tor_enabled(self.config.get_tor_enabled())
+        self.control_widget.set_passive_scan_enabled(self.config.get_passive_scan_enabled())
         self.main_layout.addWidget(self.control_widget)
 
         # Conecta os sinais do widget aos slots da janela principal
@@ -147,6 +142,7 @@ class ProxyGUI(QMainWindow):
         self.control_widget.save_port_requested.connect(self.save_port)
         self.control_widget.launch_browser_requested.connect(self.launch_browser)
         self.control_widget.tor_toggled.connect(self.toggle_tor)
+        self.control_widget.passive_scan_toggled.connect(self.toggle_passive_scan)
 
         # 3. Notebook com as abas
         self._setup_tabs()
@@ -251,7 +247,6 @@ class ProxyGUI(QMainWindow):
 
         # Cria e adiciona a aba de campanhas
         self.campaign_tab = CampaignTab(self.history, self.active_scanner)
-        self.campaign_tab.refresh_vulnerabilities_requested.connect(self.scanner_tab.refresh_vulnerabilities)
         add_tab(self.campaign_tab, "Campanhas")
         
         # Cria e adiciona a aba do Spider/Crawler
@@ -328,6 +323,7 @@ class ProxyGUI(QMainWindow):
             return
 
         log.info("Proxy (PySide6) finalizando...")
+        self.browser_manager.close()
         if self.proxy_master and self.proxy_loop:
             self.proxy_loop.call_soon_threadsafe(self.proxy_master.shutdown)
 
@@ -379,6 +375,12 @@ class ProxyGUI(QMainWindow):
         if enabled:
             QMessageBox.information(self, "TOR", f"TOR {status} com sucesso!")
 
+    def toggle_passive_scan(self, enabled: bool):
+        """Habilita/desabilita o scanner passivo automatico no historico."""
+        self.config.set_passive_scan_enabled(enabled)
+        status = "habilitado" if enabled else "desabilitado"
+        log.info(f"Scanner passivo automatico {status}.")
+
     def launch_browser(self):
         """Abre o navegador pré-configurado."""
         if not self.proxy_running:
@@ -386,7 +388,8 @@ class ProxyGUI(QMainWindow):
             return
 
         log.info("PySide6 GUI: Solicitando abertura do navegador...")
-        self.browser_manager.launch_browser()
+        if self.browser_manager.launch_browser():
+            self.control_widget.set_browser_launching()
 
     def _clear_database(self):
         """Limpa as tabelas do banco (RequestNodes e InjectionPoints)."""
@@ -421,16 +424,9 @@ class ProxyGUI(QMainWindow):
             self.scanner_tab.stop_active_scan()
         if hasattr(self, 'campaign_tab'):
             self.campaign_tab.stop_scan()
+        if hasattr(self, 'browser_manager'):
+            self.browser_manager.close()
         event.accept()
-
-    # --- Slots para Sinais do Navegador ---
-    def _on_browser_install_start(self):
-        """Atualiza a UI quando a instalação do navegador começa."""
-        self.control_widget.set_browser_installing()
-
-    def _on_browser_install_finish(self):
-        """Atualiza a UI quando a instalação do navegador termina."""
-        self.control_widget.set_browser_installed()
 
     # --- Processamento de Eventos da UI ---
     def _process_ui_queue(self):
@@ -467,6 +463,14 @@ class ProxyGUI(QMainWindow):
         elif msg_type == "refresh_vulnerabilities":
             # Sinal explícito para atualizar vulnerabilidades (ex: após scan ativo)
             self.scanner_tab.refresh_vulnerabilities()
+        elif msg_type == "browser_install_start":
+            self.control_widget.set_browser_installing()
+        elif msg_type == "browser_install_finish":
+            self.control_widget.set_browser_launching()
+        elif msg_type == "browser_launch_ready":
+            self.control_widget.set_browser_running()
+        elif msg_type in ("browser_launch_error", "browser_closed"):
+            self.control_widget.set_browser_idle(self.proxy_running)
 
     # --- Lógica da Aba de Interceptação ---
     def toggle_intercept(self):

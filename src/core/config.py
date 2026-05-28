@@ -63,6 +63,7 @@ class InterceptConfig:
         self.intercept_response_queue = queue.Queue()
         self.intercept_lock = threading.Lock()
         self.ui_queue = None  # Fila para notificar a UI
+        self.passive_scan_enabled = True
         
         # Configurações TOR
         self.tor_enabled = False
@@ -107,6 +108,7 @@ class InterceptConfig:
                     self.rules = data.get('rules', [])
                     self.scope = data.get('scope', [])
                     self.port = data.get('port', 9507)
+                    self.passive_scan_enabled = data.get('passive_scan_enabled', self.passive_scan_enabled)
                     
                     # Carrega configurações TOR
                     tor_config = data.get('tor', {})
@@ -146,6 +148,7 @@ class InterceptConfig:
                 'rules': self.rules,
                 'scope': self.scope,
                 'port': self.port,
+                'passive_scan_enabled': self.passive_scan_enabled,
                 'tor': {
                     'enabled': self.tor_enabled,
                     'port': self.tor_port,
@@ -298,6 +301,15 @@ class InterceptConfig:
             if fnmatch.fnmatch(hostname, pattern):
                 return True
         return False
+
+    def set_passive_scan_enabled(self, enabled: bool):
+        """Habilita/desabilita o scanner passivo automatico do historico."""
+        self.passive_scan_enabled = bool(enabled)
+        return self.save_config()
+
+    def get_passive_scan_enabled(self):
+        """Retorna se o scanner passivo automatico esta habilitado."""
+        return self.passive_scan_enabled
 
     def get_port(self):
         """Retorna a porta configurada."""
