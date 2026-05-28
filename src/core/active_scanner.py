@@ -29,6 +29,15 @@ class ActiveScanner:
     Realiza a varredura ativa em requisições HTTP para encontrar vulnerabilidades.
     """
 
+    CONTROL_PARAMETER_NAMES = {
+        "exec",
+        "action",
+        "method",
+        "rotina",
+        "callback",
+        "opcao",
+    }
+
     def __init__(
         self,
         use_tor: bool = False,
@@ -169,6 +178,9 @@ class ActiveScanner:
         if not name:
             return True
         lower = name.lower()
+        base_name = lower.split(".")[-1]
+        if base_name in self.CONTROL_PARAMETER_NAMES:
+            return True
         skip_fragments = (
             "_token",
             "csrf",
@@ -321,6 +333,18 @@ class ActiveScanner:
                     points.append({'name': new_key, 'value': str(item)})
         return points
 
+    def _try_parse_json_object(self, value: Any):
+        if not isinstance(value, str):
+            return None
+        text = value.strip()
+        if not text or text[0] not in "[{":
+            return None
+        try:
+            parsed = json.loads(text)
+        except Exception:
+            return None
+        return parsed if isinstance(parsed, (dict, list)) else None
+
     def _derive_injection_points_for_modules(self, base_request: Dict[str, Any]) -> List[Dict[str, Any]]:
         points: List[Dict[str, Any]] = []
         point_id = 1
@@ -334,6 +358,8 @@ class ActiveScanner:
         if self._location_allowed("QUERY", allowed_locations):
             query_params = parse_qs(parsed_url.query, keep_blank_values=True)
             for name, values in query_params.items():
+                if self._should_skip_param(name):
+                    continue
                 for value in values:
                     points.append({
                         'id': point_id,
@@ -357,14 +383,31 @@ class ActiveScanner:
         if 'application/x-www-form-urlencoded' in (content_type or '') and body_text and self._location_allowed("BODY_FORM", allowed_locations):
             form_params = parse_qs(body_text, keep_blank_values=True)
             for name, values in form_params.items():
+                if self._should_skip_param(name):
+                    continue
                 for value in values:
-                    points.append({
-                        'id': point_id,
-                        'location': 'BODY_FORM',
-                        'parameter_name': name,
-                        'original_value': value,
-                    })
-                    point_id += 1
+                    nested_json = self._try_parse_json_object(value)
+                    if nested_json is not None:
+                        for item in self._iter_json_points(nested_json):
+                            if self._should_skip_param(item['name']):
+                                continue
+                            points.append({
+                                'id': point_id,
+                                'location': 'BODY_FORM_JSON',
+                                'parameter_name': f"{name}.{item['name']}",
+                                'container_parameter': name,
+                                'json_path': item['name'],
+                                'original_value': item['value'],
+                            })
+                            point_id += 1
+                    else:
+                        points.append({
+                            'id': point_id,
+                            'location': 'BODY_FORM',
+                            'parameter_name': name,
+                            'original_value': value,
+                        })
+                        point_id += 1
 
         elif 'multipart/form-data' in (content_type or '') and body_text and self._location_allowed("BODY_FORM", allowed_locations):
             boundary_match = re.search(r'boundary=([^;\s]+)', content_type, re.IGNORECASE)
@@ -385,6 +428,8 @@ class ActiveScanner:
             try:
                 json_body = json.loads(body_text)
                 for item in self._iter_json_points(json_body):
+                    if self._should_skip_param(item['name']):
+                        continue
                     points.append({
                         'id': point_id,
                         'location': 'BODY_JSON',
@@ -462,7 +507,7 @@ class ActiveScanner:
         return {
             'type': vuln.name,
             'severity': vuln.severity,
-            'source': 'Module',
+            'source': 'Active',
             'url': base_request.get('url', 'N/A'),
             'method': base_request.get('method', 'N/A'),
             'description': vuln.description,

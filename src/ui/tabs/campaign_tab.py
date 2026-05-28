@@ -427,6 +427,7 @@ class CampaignTab(QWidget):
 
         severity_counts = Counter(v.get("severity", "Unknown") for v in vulnerabilities)
         type_counts = Counter(v.get("type", "Unknown") for v in vulnerabilities)
+        source_counts = Counter(v.get("source", "Unknown") for v in vulnerabilities)
         method_counts = Counter(route.get("method", "N/A") for route in routes)
         status_counts = Counter(str(route.get("status", "N/A")) for route in routes)
 
@@ -442,6 +443,7 @@ class CampaignTab(QWidget):
             "",
             f"- Metodos: {self._format_counter(method_counts)}",
             f"- Status: {self._format_counter(status_counts)}",
+            f"- Origem dos achados: {self._format_counter(source_counts) if vulnerabilities else 'nenhuma'}",
             f"- Severidades: {self._format_counter(severity_counts) if vulnerabilities else 'nenhuma'}",
             f"- Tipos: {self._format_counter(type_counts) if vulnerabilities else 'nenhum'}",
             "",
@@ -586,9 +588,7 @@ class CampaignTab(QWidget):
         self._merge_route_into_current_campaign(route)
         self._refresh_campaign_view(keep_details=True)
         if route:
-            metadata = route.get("campaign_metadata") or {}
-            history_id = metadata.get("source_history_id") or route.get("id")
-            self.history_manager.add_vulnerabilities_to_entry(history_id, vulnerabilities)
+            self._sync_vulnerabilities_to_history(route, vulnerabilities)
         self.refresh_vulnerabilities_requested.emit()
 
     def _on_scan_finished(self, total, total_added):
@@ -642,6 +642,28 @@ class CampaignTab(QWidget):
         for route in campaign_routes(self.campaign or {}):
             if self._route_signature(route) == scanned_signature:
                 route["vulnerabilities"] = scanned_route.get("vulnerabilities", []) or []
+                return
+
+    def _sync_vulnerabilities_to_history(self, route, vulnerabilities):
+        if not vulnerabilities:
+            return
+        metadata = route.get("campaign_metadata") or {}
+        candidate_ids = [metadata.get("source_history_id"), route.get("id")]
+        for entry_id in candidate_ids:
+            if entry_id and self.history_manager.add_vulnerabilities_to_entry(entry_id, vulnerabilities):
+                return
+
+        # Fallback para campanhas antigas/importadas sem source_history_id correto.
+        route_url = route.get("url")
+        route_method = route.get("method")
+        route_body = route.get("request_body", "")
+        for entry in reversed(self.history_manager.get_history()):
+            if (
+                entry.get("url") == route_url
+                and entry.get("method") == route_method
+                and entry.get("request_body", "") == route_body
+            ):
+                self.history_manager.add_vulnerabilities_to_entry(entry.get("id"), vulnerabilities)
                 return
 
     @staticmethod

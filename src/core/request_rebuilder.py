@@ -21,6 +21,13 @@ def _update_nested_dict(data: Dict[str, Any], path: str, value: Any) -> Dict[str
     return data
 
 
+def _update_nested_json_text(raw_json: str, path: str, value: Any) -> str:
+    data = json.loads(raw_json)
+    if isinstance(data, dict):
+        data = _update_nested_dict(data, path, value)
+    return json.dumps(data, separators=(",", ":"))
+
+
 def rebuild_attack_request(
     request_node: RequestNode,
     injection_point: InjectionPoint,
@@ -88,6 +95,21 @@ def rebuild_attack_request(
                     break
         data = urlencode(form_data, doseq=True)
         # Ensure Content-Type is set for form data
+        if 'Content-Type' not in headers:
+            headers['Content-Type'] = 'application/x-www-form-urlencoded'
+
+    if location == 'BODY_FORM_JSON':
+        form_data = parse_qs(body.decode('utf-8', errors='ignore'), keep_blank_values=True)
+        container_param = injection_point.get('container_parameter')
+        json_path = injection_point.get('json_path') or param_name
+        if container_param in form_data:
+            for i, val in enumerate(form_data[container_param]):
+                try:
+                    form_data[container_param][i] = _update_nested_json_text(val, json_path, payload)
+                    break
+                except (json.JSONDecodeError, KeyError, TypeError):
+                    continue
+        data = urlencode(form_data, doseq=True)
         if 'Content-Type' not in headers:
             headers['Content-Type'] = 'application/x-www-form-urlencoded'
 
