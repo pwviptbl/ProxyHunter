@@ -431,10 +431,12 @@ class ProxyGUI(QMainWindow):
     # --- Processamento de Eventos da UI ---
     def _process_ui_queue(self):
         """Verifica a fila de eventos e emite um sinal para a thread principal."""
+        processed = 0
         try:
-            while not self.ui_queue.empty():
+            while processed < 200:
                 message = self.ui_queue.get_nowait()
-                self.ui_update_signal.emit(message)
+                processed += 1
+                self._handle_ui_update(message)
         except queue.Empty:
             pass
 

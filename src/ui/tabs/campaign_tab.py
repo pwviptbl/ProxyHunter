@@ -1,19 +1,24 @@
 import json
 import os
+import queue
+import threading
 from collections import Counter
 from datetime import datetime
 
-from PySide6.QtCore import QAbstractTableModel, QModelIndex, Qt, QThread, Signal, QTimer
+from PySide6.QtCore import QAbstractTableModel, QModelIndex, Qt, Signal, QTimer
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
     QComboBox,
-    QFileDialog,
+    QDialog,
+    QDialogButtonBox,
     QGroupBox,
     QHBoxLayout,
     QHeaderView,
     QLabel,
     QLineEdit,
+    QListWidget,
+    QListWidgetItem,
     QMessageBox,
     QPushButton,
     QSplitter,
@@ -73,31 +78,108 @@ INSERTION_LOCATION_OPTIONS = {
 }
 
 
-class CampaignScanWorker(QThread):
-    route_started = Signal(int, int, str)
-    route_done = Signal(dict, list)
-    log_message = Signal(str)
-    finished_summary = Signal(int, int)
+class PathPickerDialog(QDialog):
+    """Dialogo simples sem QFileDialog para evitar segfaults em alguns desktops."""
 
+    def __init__(self, parent, title, initial_path, extension, save_mode=False):
+        super().__init__(parent)
+        self.extension = extension
+        self.save_mode = save_mode
+        self.setWindowTitle(title)
+        self.setWindowModality(Qt.WindowModality.ApplicationModal)
+        self.resize(720, 420)
+
+        layout = QVBoxLayout(self)
+        directory = initial_path if os.path.isdir(initial_path) else os.path.dirname(initial_path)
+        self.directory = directory or "."
+
+        layout.addWidget(QLabel(f"Diretorio: {os.path.abspath(self.directory)}"))
+        self.file_list = QListWidget()
+        self.file_list.itemDoubleClicked.connect(self._accept_item)
+        layout.addWidget(self.file_list)
+
+        path_row = QHBoxLayout()
+        path_row.addWidget(QLabel("Arquivo:"))
+        self.path_input = QLineEdit(initial_path if save_mode else "")
+        path_row.addWidget(self.path_input)
+        layout.addLayout(path_row)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+        self._populate()
+
+    def _populate(self):
+        os.makedirs(self.directory, exist_ok=True)
+        for filename in sorted(os.listdir(self.directory)):
+            if not filename.lower().endswith(self.extension):
+                continue
+            path = os.path.join(self.directory, filename)
+            if not os.path.isfile(path):
+                continue
+            item = QListWidgetItem(filename)
+            item.setData(Qt.ItemDataRole.UserRole, path)
+            self.file_list.addItem(item)
+
+    def _accept_item(self, item):
+        path = item.data(Qt.ItemDataRole.UserRole)
+        if path:
+            self.path_input.setText(path)
+        self.accept()
+
+    def selected_path(self):
+        path = self.path_input.text().strip()
+        if not path:
+            return ""
+        if self.save_mode and not path.lower().endswith(self.extension):
+            path = f"{path}{self.extension}"
+        return path
+
+
+class CampaignScanWorker:
     def __init__(
         self,
         routes,
         active_scanner: ActiveScanner,
+        event_queue: queue.Queue,
         run_passive=True,
         run_active=True,
         enabled_modules=None,
         enabled_builtin_checks=None,
         insertion_locations=None,
     ):
-        super().__init__()
         self.routes = routes
         self.active_scanner = active_scanner
+        self.event_queue = event_queue
         self.run_passive = run_passive
         self.run_active = run_active
         self.enabled_modules = enabled_modules
         self.enabled_builtin_checks = enabled_builtin_checks
         self.insertion_locations = insertion_locations
         self.passive_scanner = VulnerabilityScanner() if run_passive else None
+        self._stop_event = threading.Event()
+        self._thread = None
+
+    def start(self):
+        self._thread = threading.Thread(target=self.run, daemon=True)
+        self._thread.start()
+
+    def isRunning(self):
+        return bool(self._thread and self._thread.is_alive())
+
+    def requestInterruption(self):
+        self._stop_event.set()
+
+    def wait(self, timeout_ms=None):
+        if not self._thread:
+            return
+        timeout = None if timeout_ms is None else timeout_ms / 1000
+        self._thread.join(timeout=timeout)
+
+    def _emit(self, event_type, *args):
+        self.event_queue.put({"type": event_type, "args": args})
 
     def run(self):
         total_added = 0
@@ -105,14 +187,14 @@ class CampaignScanWorker(QThread):
         old_callback = self.active_scanner.log_callback
         try:
             if self.run_active:
-                self.active_scanner.log_callback = lambda msg: self.log_message.emit(msg)
+                self.active_scanner.log_callback = lambda msg: self._emit("log_message", msg)
 
             for index, route in enumerate(self.routes):
-                if self.isInterruptionRequested():
+                if self._stop_event.is_set():
                     break
 
                 label = f"{route.get('method', '')} {route.get('url', '')}"
-                self.route_started.emit(index + 1, total, label)
+                self._emit("route_started", index + 1, total, label)
                 vulnerabilities = []
 
                 if self.passive_scanner:
@@ -135,11 +217,12 @@ class CampaignScanWorker(QThread):
 
                 added = self._merge_vulnerabilities(route, vulnerabilities)
                 total_added += added
-                self.route_done.emit(route, route.get("vulnerabilities", []))
+                self._emit("route_done", route, route.get("vulnerabilities", []))
 
         finally:
             self.active_scanner.log_callback = old_callback
-            self.finished_summary.emit(total, total_added)
+            self._emit("finished_summary", total, total_added)
+            self._emit("worker_finished")
 
     @staticmethod
     def _merge_vulnerabilities(route, vulnerabilities):
@@ -180,7 +263,10 @@ class CampaignTab(QWidget):
         self.auto_scan_signatures = set()
         self.auto_scan_running = False
         self.autosave_path = os.path.join("logs", "campaign_autosave.json")
+        self.campaign_file_path = None
         self.pending_log_lines = []
+        self.autosave_pending = False
+        self.scan_event_queue = queue.Queue()
 
         layout = QVBoxLayout(self)
         self._setup_capture_section(layout)
@@ -194,6 +280,14 @@ class CampaignTab(QWidget):
         self.log_flush_timer = QTimer(self)
         self.log_flush_timer.timeout.connect(self._flush_log_lines)
         self.log_flush_timer.start(250)
+
+        self.autosave_timer = QTimer(self)
+        self.autosave_timer.setSingleShot(True)
+        self.autosave_timer.timeout.connect(self._flush_autosave)
+
+        self.scan_event_timer = QTimer(self)
+        self.scan_event_timer.timeout.connect(self._process_scan_events)
+        self.scan_event_timer.start(100)
         self._load_autosave_campaign()
 
     def _setup_capture_section(self, layout):
@@ -314,17 +408,25 @@ class CampaignTab(QWidget):
 
     def toggle_capture(self):
         if self.capture_start_id is None:
+            if self.scan_worker and self.scan_worker.isRunning():
+                QMessageBox.information(self, "Captura", "Finalize ou aguarde o scan de campanha atual antes de iniciar outro modulo.")
+                return
             entries = self.history_manager.get_history()
             self.capture_start_id = max([e.get("id", 0) for e in entries] or [0])
             self.captured_entries = []
             self.auto_scan_queue = []
             self.auto_scan_signatures = set()
             self.auto_scan_running = False
-            self.campaign = build_campaign(
-                self.captured_entries,
-                name=self.name_input.text().strip() or "campanha-gui",
-                scope=self._scope_terms(),
-            )
+            if self._name_changed_for_new_capture():
+                self._start_new_named_campaign()
+            elif not self.campaign:
+                self.campaign = build_campaign(
+                    [],
+                    name=self.name_input.text().strip() or "campanha-gui",
+                    scope=self._scope_terms(),
+                )
+            else:
+                self._sync_campaign_identity()
             self._refresh_campaign_view()
             self._autosave_campaign()
             self.capture_button.setText("Finalizar Captura")
@@ -334,8 +436,11 @@ class CampaignTab(QWidget):
         start_id = self.capture_start_id
         self.capture_start_id = None
         self.capture_button.setText("Iniciar Captura")
-        entries = self.captured_entries or [e for e in self.history_manager.get_history() if e.get("id", 0) > start_id]
-        self._build_campaign(entries)
+        if self.captured_entries:
+            self._refresh_campaign_view()
+        else:
+            entries = [e for e in self.history_manager.get_history() if e.get("id", 0) > start_id]
+            self._merge_entries_into_campaign(entries)
         self._autosave_campaign()
 
     def add_captured_entry(self, entry):
@@ -345,13 +450,8 @@ class CampaignTab(QWidget):
         if not entry or entry.get("id", 0) <= self.capture_start_id:
             return
         self.captured_entries.append(entry)
-        self.campaign = build_campaign(
-            self.captured_entries,
-            name=self.name_input.text().strip() or "campanha-gui",
-            scope=self._scope_terms(),
-        )
-        self._refresh_campaign_view(keep_details=True)
-        self._autosave_campaign()
+        self._merge_entries_into_campaign([entry], keep_details=True)
+        self._schedule_autosave()
         if self.auto_scan_checkbox.isChecked():
             self._enqueue_auto_scan_routes()
 
@@ -367,8 +467,61 @@ class CampaignTab(QWidget):
         if self.auto_scan_checkbox.isChecked():
             self._enqueue_auto_scan_routes()
 
+    def _merge_entries_into_campaign(self, entries, keep_details=False):
+        self._sync_campaign_identity()
+        base_name = self.name_input.text().strip() or (self.campaign or {}).get("name") or "campanha-gui"
+        scope = self._scope_terms()
+        incoming = build_campaign(entries, name=base_name, scope=scope)
+        if not self.campaign:
+            self.campaign = incoming
+            self._refresh_campaign_view(keep_details=keep_details)
+            return
+
+        routes = campaign_routes(self.campaign)
+        existing_signatures = {
+            (route.get("campaign_metadata") or {}).get("signature")
+            for route in routes
+        }
+        added = 0
+        for route in campaign_routes(incoming):
+            signature = (route.get("campaign_metadata") or {}).get("signature")
+            if signature and signature in existing_signatures:
+                continue
+            route["id"] = len(routes) + 1
+            routes.append(route)
+            existing_signatures.add(signature)
+            added += 1
+
+        stats = self.campaign.setdefault("stats", {})
+        incoming_stats = incoming.get("stats", {})
+        stats["input"] = int(stats.get("input", 0) or 0) + int(incoming_stats.get("input", 0) or 0)
+        stats["in_scope"] = int(stats.get("in_scope", 0) or 0) + int(incoming_stats.get("in_scope", 0) or 0)
+        for key in ("ignored_static", "ignored_no_surface", "ignored_duplicate"):
+            stats[key] = int(stats.get(key, 0) or 0) + int(incoming_stats.get(key, 0) or 0)
+        stats["routes"] = len(routes)
+        stats["merged_last"] = added
+        self._refresh_campaign_view(keep_details=keep_details)
+
+    def _name_changed_for_new_capture(self):
+        if not self.campaign:
+            return False
+        requested_name = self.name_input.text().strip()
+        current_name = str(self.campaign.get("name") or "").strip()
+        return bool(requested_name and current_name and requested_name != current_name)
+
+    def _start_new_named_campaign(self):
+        old_path = self.campaign_file_path
+        name = self.name_input.text().strip() or "campanha-gui"
+        self.campaign = build_campaign([], name=name, scope=self._scope_terms())
+        self.campaign_file_path = os.path.join(
+            os.path.dirname(old_path) if old_path else "logs",
+            f"{self._safe_filename(name)}.json",
+        )
+        self.auto_scan_queue = []
+        self.auto_scan_signatures = set()
+
     def import_campaign(self):
-        path, _ = QFileDialog.getOpenFileName(self, "Importar campanha", "logs", "JSON (*.json);;Todos (*.*)")
+        path = self._open_file_dialog("Importar campanha", "logs", "JSON (*.json);;Todos (*.*)")
         if not path:
             return
         try:
@@ -380,7 +533,10 @@ class CampaignTab(QWidget):
         if not isinstance(campaign, dict) or campaign.get("schema") != "proxyhunter.campaign":
             QMessageBox.warning(self, "Importar", "Arquivo nao parece ser uma campanha do ProxyHunter.")
             return
+        if not campaign.get("name"):
+            campaign["name"] = os.path.splitext(os.path.basename(path))[0]
         self.campaign = campaign
+        self.campaign_file_path = path
         self.name_input.setText(str(campaign.get("name", "")))
         self.scope_input.setText(",".join(campaign.get("scope", []) or []))
         self._refresh_campaign_view()
@@ -390,8 +546,10 @@ class CampaignTab(QWidget):
         if not self.campaign:
             QMessageBox.information(self, "Exportar", "Nao ha campanha para exportar.")
             return
+        self._sync_campaign_identity()
         default_name = f"{self.campaign.get('name', 'campaign')}.json".replace("/", "_")
-        path, _ = QFileDialog.getSaveFileName(self, "Exportar campanha", os.path.join("logs", default_name), "JSON (*.json)")
+        default_path = self._campaign_named_path(default_name=default_name)
+        path = self._save_file_dialog("Exportar campanha", default_path, "JSON (*.json)")
         if not path:
             return
         try:
@@ -399,10 +557,11 @@ class CampaignTab(QWidget):
             if directory:
                 os.makedirs(directory, exist_ok=True)
             with open(path, "w", encoding="utf-8") as f:
-                json.dump(self.campaign, f, indent=2, ensure_ascii=False)
+                json.dump(self.campaign, f, indent=2, ensure_ascii=False, default=self._json_default)
         except Exception as exc:
             QMessageBox.critical(self, "Exportar", f"Falha ao exportar campanha: {exc}")
             return
+        self.campaign_file_path = path
         QMessageBox.information(self, "Exportar", f"Campanha exportada em:\n{path}")
 
     def generate_report(self):
@@ -410,8 +569,9 @@ class CampaignTab(QWidget):
             QMessageBox.information(self, "Relatório", "Nao ha campanha para gerar relatório.")
             return
 
+        self._sync_campaign_identity()
         default_name = f"relatorio_{self.campaign.get('name', 'campanha')}.md".replace("/", "_")
-        path, _ = QFileDialog.getSaveFileName(self, "Salvar relatório da campanha", os.path.join("reports", default_name), "Markdown (*.md)")
+        path = self._save_file_dialog("Salvar relatório da campanha", os.path.join("reports", default_name), "Markdown (*.md)")
         if not path:
             return
 
@@ -426,6 +586,20 @@ class CampaignTab(QWidget):
             return
 
         QMessageBox.information(self, "Relatório", f"Relatório salvo em:\n{path}")
+
+    def _open_file_dialog(self, title, directory, name_filter):
+        extension = ".json" if "JSON" in name_filter else ".md"
+        dialog = PathPickerDialog(self.window() or self, title, directory, extension, save_mode=False)
+        if dialog.exec():
+            return dialog.selected_path()
+        return ""
+
+    def _save_file_dialog(self, title, filename, name_filter):
+        extension = ".json" if "JSON" in name_filter else ".md"
+        dialog = PathPickerDialog(self.window() or self, title, filename, extension, save_mode=True)
+        if dialog.exec():
+            return dialog.selected_path()
+        return ""
 
     def _build_markdown_report(self):
         routes = campaign_routes(self.campaign or {})
@@ -603,17 +777,13 @@ class CampaignTab(QWidget):
         self.scan_worker = CampaignScanWorker(
             routes,
             self.active_scanner,
+            self.scan_event_queue,
             run_passive,
             run_active,
             enabled_modules=enabled_modules,
             enabled_builtin_checks=enabled_builtin_checks,
             insertion_locations=insertion_locations,
         )
-        self.scan_worker.route_started.connect(self._on_route_started)
-        self.scan_worker.route_done.connect(self._on_route_done)
-        self.scan_worker.log_message.connect(self._append_log)
-        self.scan_worker.finished_summary.connect(self._on_scan_finished)
-        self.scan_worker.finished.connect(self._on_worker_finished)
         self.scan_worker.start()
         return True
 
@@ -622,8 +792,28 @@ class CampaignTab(QWidget):
             self.scan_worker.requestInterruption()
             self.scan_worker.wait(3000)
             if self.scan_worker.isRunning():
-                self.scan_worker.terminate()
-                self.scan_worker.wait(1000)
+                self._append_log("Scan ainda finalizando request em andamento; interrupcao solicitada.")
+
+    def _process_scan_events(self):
+        processed = 0
+        while processed < 100:
+            try:
+                event = self.scan_event_queue.get_nowait()
+            except queue.Empty:
+                break
+            processed += 1
+            event_type = event.get("type")
+            args = event.get("args", ())
+            if event_type == "route_started":
+                self._on_route_started(*args)
+            elif event_type == "route_done":
+                self._on_route_done(*args)
+            elif event_type == "log_message":
+                self._append_log(*args)
+            elif event_type == "finished_summary":
+                self._on_scan_finished(*args)
+            elif event_type == "worker_finished":
+                self._on_worker_finished()
 
     def _on_route_started(self, index, total, label):
         self.status_label.setText(f"Escaneando {index}/{total}: {label}")
@@ -642,9 +832,7 @@ class CampaignTab(QWidget):
         self._refresh_campaign_view(keep_details=True)
 
     def _on_worker_finished(self):
-        if self.scan_worker:
-            self.scan_worker.deleteLater()
-            self.scan_worker = None
+        self.scan_worker = None
         if self.auto_scan_running:
             self.auto_scan_running = False
             self._start_next_auto_scan_batch()
@@ -741,21 +929,43 @@ class CampaignTab(QWidget):
         sb = self.details_text.verticalScrollBar()
         sb.setValue(sb.maximum())
 
+    def _schedule_autosave(self):
+        self.autosave_pending = True
+        if not self.autosave_timer.isActive():
+            self.autosave_timer.start(1500)
+
+    def _flush_autosave(self):
+        if not self.autosave_pending:
+            return
+        self.autosave_pending = False
+        self._autosave_campaign()
+
     def _autosave_campaign(self):
         if not self.campaign:
             return
         try:
-            directory = os.path.dirname(self.autosave_path)
+            self._sync_campaign_identity()
+            path = self._campaign_named_path()
+            directory = os.path.dirname(path)
             if directory:
                 os.makedirs(directory, exist_ok=True)
             payload = dict(self.campaign)
             payload["autosaved_at"] = datetime.now().isoformat(timespec="seconds")
-            temp_path = f"{self.autosave_path}.tmp"
+            temp_path = f"{path}.tmp"
             with open(temp_path, "w", encoding="utf-8") as f:
-                json.dump(payload, f, indent=2, ensure_ascii=False)
-            os.replace(temp_path, self.autosave_path)
+                json.dump(payload, f, indent=2, ensure_ascii=False, default=self._json_default)
+            os.replace(temp_path, path)
+            self.campaign_file_path = path
         except Exception:
             pass
+
+    @staticmethod
+    def _json_default(value):
+        if isinstance(value, datetime):
+            return value.isoformat(timespec="seconds")
+        if isinstance(value, bytes):
+            return value.decode("utf-8", errors="replace")
+        return str(value)
 
     def _load_autosave_campaign(self):
         if not os.path.exists(self.autosave_path):
@@ -768,12 +978,36 @@ class CampaignTab(QWidget):
         if not isinstance(campaign, dict) or campaign.get("schema") != "proxyhunter.campaign":
             return
         self.campaign = campaign
+        self.campaign_file_path = self.autosave_path
         self.name_input.setText(str(campaign.get("name", "")))
         self.scope_input.setText(",".join(campaign.get("scope", []) or []))
         self._refresh_campaign_view()
         autosaved_at = campaign.get("autosaved_at")
         if autosaved_at:
             self.status_label.setText(f"Autosave restaurado de {autosaved_at}.")
+
+    def _sync_campaign_identity(self):
+        if not self.campaign:
+            return
+        name = self.name_input.text().strip() or self.campaign.get("name") or "campanha-gui"
+        self.campaign["name"] = name
+        self.campaign["scope"] = self._scope_terms()
+
+    def _campaign_named_path(self, default_name=None):
+        name = default_name or f"{self._safe_filename((self.campaign or {}).get('name') or self.name_input.text() or 'campanha-gui')}.json"
+        if not name.lower().endswith(".json"):
+            name = f"{name}.json"
+
+        base_dir = "logs"
+        if self.campaign_file_path:
+            base_dir = os.path.dirname(self.campaign_file_path) or "."
+        return os.path.join(base_dir, name)
+
+    @staticmethod
+    def _safe_filename(value):
+        safe = "".join(ch if ch.isalnum() or ch in ("-", "_", ".") else "_" for ch in str(value).strip())
+        safe = safe.strip("._")
+        return safe or "campanha-gui"
 
     def _on_selection_changed(self, selected, deselected):
         row = self._selected_source_row()

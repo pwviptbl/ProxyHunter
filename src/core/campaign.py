@@ -154,7 +154,7 @@ def route_signature(entry: Dict[str, Any]) -> Tuple[Any, ...]:
 
 
 def _campaign_route(entry: Dict[str, Any], source_id: int) -> Dict[str, Any]:
-    route = deepcopy(entry)
+    route = _json_safe(deepcopy(entry))
     original_id = entry.get("id")
     route["id"] = source_id
     route["campaign_metadata"] = {
@@ -164,6 +164,20 @@ def _campaign_route(entry: Dict[str, Any], source_id: int) -> Dict[str, Any]:
         "captured_elapsed_ms": entry.get("elapsed_ms"),
     }
     return route
+
+
+def _json_safe(value: Any) -> Any:
+    if isinstance(value, datetime):
+        return value.isoformat(timespec="seconds")
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    if isinstance(value, dict):
+        return {str(k): _json_safe(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_json_safe(v) for v in value]
+    if isinstance(value, tuple):
+        return [_json_safe(v) for v in value]
+    return value
 
 
 def build_campaign(
