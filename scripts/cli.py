@@ -103,7 +103,13 @@ from src.core.logger_config import log
 from src.core.scanner import VulnerabilityScanner
 from src.core.active_scanner import ActiveScanner
 from src.core.oast_client import OASTClient
-from src.core.campaign import build_campaign, campaign_routes, update_campaign_auth
+from src.core.campaign import (
+    build_campaign,
+    campaign_routes,
+    parse_cookie_header,
+    parse_raw_http_headers,
+    update_campaign_auth,
+)
 
 
 CAMPAIGN_SCAN_TYPES = {
@@ -539,8 +545,12 @@ def campaign_import(source_file, out_file):
 @campaign_group.command('update-auth')
 @click.option('--file', 'campaign_file', default="logs/campaign.json", show_default=True, help="Arquivo da campanha.")
 @click.option('--cookie', 'cookies', multiple=True, help="Cookie para injetar/atualizar. Ex: --cookie 'PHPSESSID=novo123'")
+@click.option('--cookie-header', default=None, help="Header Cookie completo para substituir. Ex: 'PHPSESSID=novo; ECIDADEWINDOWMAIN=abc'")
+@click.option('--raw-request-file', default=None, help="Arquivo com request HTTP bruto; extrai Cookie/Authorization.")
 @click.option('--header', 'headers', multiple=True, help="Header para injetar/atualizar. Ex: --header 'Authorization: Bearer novo123'")
-def campaign_update_auth(campaign_file, cookies, headers):
+@click.option('--replace-cookie-header/--merge-cookies', default=False, show_default=True, help="Substitui o header Cookie inteiro quando usado com --cookie.")
+@click.option('--adapt-ecidade-window/--no-adapt-ecidade-window', default=True, show_default=True, help="Renomeia ECIDADEWINDOWN conforme a URL /e-cidade/w/N.")
+def campaign_update_auth(campaign_file, cookies, cookie_header, raw_request_file, headers, replace_cookie_header, adapt_ecidade_window):
     """Atualiza/injeta cookies e headers em todas as rotas da campanha."""
     try:
         campaign = _load_json(campaign_file)
@@ -549,22 +559,48 @@ def campaign_update_auth(campaign_file, cookies, headers):
         return
 
     update_headers = {}
+    exact_cookie_header = cookie_header.strip() if cookie_header else None
+
+    if raw_request_file:
+        try:
+            with open(raw_request_file, "r", encoding="utf-8", errors="replace") as f:
+                raw_headers = parse_raw_http_headers(f.read())
+        except FileNotFoundError:
+            click.echo(f"Arquivo nao encontrado: {raw_request_file}")
+            return
+        for k, v in raw_headers.items():
+            if k.lower() == "cookie":
+                exact_cookie_header = v
+            elif k.lower() == "authorization":
+                update_headers["Authorization"] = v
+
     for h in headers:
         if ':' in h:
             k, v = h.split(':', 1)
             update_headers[k.strip()] = v.strip()
             
-    update_cookies = {}
+    update_cookies = parse_cookie_header(exact_cookie_header or "")
     for c in cookies:
         if '=' in c:
             k, v = c.split('=', 1)
             update_cookies[k.strip()] = v.strip()
 
-    if not update_headers and not update_cookies:
+    if exact_cookie_header is not None and cookies:
+        exact_cookie_header = "; ".join(f"{k}={v}" for k, v in update_cookies.items())
+    elif replace_cookie_header and update_cookies and exact_cookie_header is None:
+        exact_cookie_header = "; ".join(f"{k}={v}" for k, v in update_cookies.items())
+
+    if not update_headers and not update_cookies and exact_cookie_header is None:
         click.echo("Nenhum cookie ou header fornecido para atualizacao. Use --cookie ou --header.")
         return
 
-    updated = update_campaign_auth(campaign, update_headers, update_cookies)
+    updated = update_campaign_auth(
+        campaign,
+        update_headers,
+        update_cookies,
+        cookie_header=exact_cookie_header,
+        adapt_ecidade_window=adapt_ecidade_window,
+    )
     if updated > 0:
         _save_json(campaign_file, campaign)
         click.echo(click.style(f"Campanha atualizada! Sessoes/Tokens injetados em {updated} rotas.", fg="green"))

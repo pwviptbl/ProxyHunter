@@ -93,10 +93,31 @@ class ActiveScanner:
             self._logs_dir = base
         return self._logs_dir
 
-    def _dump_request(self, method: str, url: str, headers: Dict[str, str], body: str, context_tag: str, point_name: str, payload: str, status_code: Optional[Union[int, str]] = None):
+    def _dump_request(
+        self,
+        method: str,
+        url: str,
+        headers: Dict[str, str],
+        body: str,
+        context_tag: str,
+        point_name: str,
+        payload: str,
+        status_code: Optional[Union[int, str]] = None,
+        response_headers: Optional[Dict[str, str]] = None,
+    ):
         try:
             logs_dir = self._ensure_logs_dir()
             log_file_path = os.path.join(logs_dir, "active_scanner_requests.log")
+            debug_headers = {}
+            for key, value in (headers or {}).items():
+                if str(key).lower() == "authorization":
+                    debug_headers[key] = "<redacted>"
+                else:
+                    debug_headers[key] = value
+            debug_response_headers = {}
+            for key, value in (response_headers or {}).items():
+                if str(key).lower() in {"location", "set-cookie", "content-type"}:
+                    debug_response_headers[key] = value
             
             with open(log_file_path, 'a', encoding='utf-8') as f:
                 f.write(f"Test: {context_tag} on parameter {point_name}\n")
@@ -107,8 +128,12 @@ class ActiveScanner:
                     f.write(f"Sent (URL): {url}\n")
                     if body:
                         f.write(f"Body: {body}\n")
+                if debug_headers:
+                    f.write(f"Headers: {json.dumps(debug_headers, ensure_ascii=False)}\n")
                 if status_code is not None:
                     f.write(f"Response Status: {status_code}\n")
+                if debug_response_headers:
+                    f.write(f"Response Headers: {json.dumps(debug_response_headers, ensure_ascii=False)}\n")
                 f.write("-" * 20 + "\n")
 
         except Exception as e:
@@ -633,7 +658,17 @@ class ActiveScanner:
                     raise
                 finally:
                     body_decoded = body if isinstance(body, str) else (body or b'').decode('utf-8', errors='replace')
-                    self._dump_request(method, new_url, headers, body_decoded, context_tag, insertion_point.get('name'), payload, status_code)
+                    self._dump_request(
+                        method,
+                        new_url,
+                        headers,
+                        body_decoded,
+                        context_tag,
+                        insertion_point.get('name'),
+                        payload,
+                        status_code,
+                        dict(response.headers) if response is not None else None,
+                    )
                 
             elif insertion_point['type'] == 'body':
                 body_params = parse_qs(body, keep_blank_values=True)
@@ -666,7 +701,17 @@ class ActiveScanner:
                     status_code = f"Error: {req_err}"
                     raise
                 finally:
-                    self._dump_request(method, url, new_headers, new_body_str, context_tag, insertion_point.get('name'), payload, status_code)
+                    self._dump_request(
+                        method,
+                        url,
+                        new_headers,
+                        new_body_str,
+                        context_tag,
+                        insertion_point.get('name'),
+                        payload,
+                        status_code,
+                        dict(response.headers) if response is not None else None,
+                    )
 
             # Fallback para outros tipos ou se não for url/body
             else:
@@ -678,7 +723,17 @@ class ActiveScanner:
                     raise
                 finally:
                     body_decoded = body if isinstance(body, str) else (body or b'').decode('utf-8', errors='replace')
-                    self._dump_request(method, url, headers, body_decoded, context_tag, insertion_point.get('name'), payload, status_code)
+                    self._dump_request(
+                        method,
+                        url,
+                        headers,
+                        body_decoded,
+                        context_tag,
+                        insertion_point.get('name'),
+                        payload,
+                        status_code,
+                        dict(response.headers) if response is not None else None,
+                    )
             
             return response
             

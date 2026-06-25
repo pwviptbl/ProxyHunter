@@ -31,7 +31,13 @@ from PySide6.QtWidgets import (
 from PySide6.QtGui import QAction
 
 from src.core.active_scanner import ActiveScanner
-from src.core.campaign import build_campaign, campaign_routes, update_campaign_auth
+from src.core.campaign import (
+    build_campaign,
+    campaign_routes,
+    parse_cookie_header,
+    parse_raw_http_headers,
+    update_campaign_auth,
+)
 from src.core.history import RequestHistory
 from src.core.scanner import VulnerabilityScanner
 
@@ -143,17 +149,30 @@ class UpdateAuthDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("Injetar Sessão / Atualizar Headers")
         self.setWindowModality(Qt.WindowModality.ApplicationModal)
-        self.resize(500, 200)
+        self.resize(680, 360)
 
         layout = QVBoxLayout(self)
         
-        layout.addWidget(QLabel("Informe novos Cookies e/ou Headers para atualizar em todas as rotas da campanha atual."))
-        layout.addWidget(QLabel("Deixe em branco o que não desejar alterar."))
+        layout.addWidget(QLabel("Cole o header Cookie, ou o request HTTP completo capturado no navegador."))
 
-        self.cookie_input = QLineEdit()
-        self.cookie_input.setPlaceholderText("Ex: PHPSESSID=novo_id; ECIDADEWINDOWMAIN=abc")
-        layout.addWidget(QLabel("Novo valor de Cookie(s):"))
+        self.cookie_input = QTextEdit()
+        self.cookie_input.setPlaceholderText(
+            "Ex: Cookie: PHPSESSID=novo_id; ECIDADEWINDOWMAIN=abc\n"
+            "ou: GET /e-cidade/... HTTP/1.1\nHost: ...\nCookie: ..."
+        )
+        self.cookie_input.setMinimumHeight(130)
+        layout.addWidget(QLabel("Cookie ou request bruto:"))
         layout.addWidget(self.cookie_input)
+
+        self.replace_cookie_checkbox = QCheckBox("Substituir o header Cookie inteiro")
+        self.replace_cookie_checkbox.setChecked(True)
+        self.replace_cookie_checkbox.setToolTip("Use ligado para renovar sessão/janelas do e-Cidade sem manter cookies antigos.")
+        layout.addWidget(self.replace_cookie_checkbox)
+
+        self.adapt_ecidade_window_checkbox = QCheckBox("Ajustar ECIDADEWINDOW pela URL /w/N")
+        self.adapt_ecidade_window_checkbox.setChecked(True)
+        self.adapt_ecidade_window_checkbox.setToolTip("Ex: Cookie com ECIDADEWINDOW5 vira ECIDADEWINDOW2 em rotas /e-cidade/w/2.")
+        layout.addWidget(self.adapt_ecidade_window_checkbox)
 
         self.auth_input = QLineEdit()
         self.auth_input.setPlaceholderText("Ex: Bearer novo_token_aqui")
@@ -166,22 +185,36 @@ class UpdateAuthDialog(QDialog):
         layout.addWidget(buttons)
 
     def get_auth_data(self):
-        cookies = self.cookie_input.text().strip()
+        raw_cookie_text = self.cookie_input.toPlainText().strip()
         auth = self.auth_input.text().strip()
         
         update_cookies = {}
         update_headers = {}
-        
-        if cookies:
-            for part in cookies.split(";"):
-                if "=" in part:
-                    k, v = part.split("=", 1)
-                    update_cookies[k.strip()] = v.strip()
-                    
+
+        cookie_header = None
+        pasted_headers = parse_raw_http_headers(raw_cookie_text)
+        if pasted_headers:
+            for key, value in pasted_headers.items():
+                if key.lower() == "cookie":
+                    cookie_header = value
+                elif key.lower() == "authorization" and not auth:
+                    update_headers["Authorization"] = value
+        elif raw_cookie_text:
+            cookie_header = raw_cookie_text
+
+        if cookie_header:
+            update_cookies = parse_cookie_header(cookie_header)
+
         if auth:
             update_headers["Authorization"] = auth
-            
-        return update_headers, update_cookies
+
+        exact_cookie_header = cookie_header if self.replace_cookie_checkbox.isChecked() and cookie_header else None
+        return (
+            update_headers,
+            update_cookies,
+            exact_cookie_header,
+            self.adapt_ecidade_window_checkbox.isChecked(),
+        )
 
 
 
@@ -600,11 +633,17 @@ class CampaignTab(QWidget):
             
         dialog = UpdateAuthDialog(self)
         if dialog.exec():
-            update_headers, update_cookies = dialog.get_auth_data()
-            if not update_headers and not update_cookies:
+            update_headers, update_cookies, cookie_header, adapt_ecidade_window = dialog.get_auth_data()
+            if not update_headers and not update_cookies and cookie_header is None:
                 return
                 
-            updated = update_campaign_auth(self.campaign, update_headers, update_cookies)
+            updated = update_campaign_auth(
+                self.campaign,
+                update_headers,
+                update_cookies,
+                cookie_header=cookie_header,
+                adapt_ecidade_window=adapt_ecidade_window,
+            )
             if updated > 0:
                 self._refresh_campaign_view()
                 self._autosave_campaign()

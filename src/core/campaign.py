@@ -7,6 +7,7 @@ requests with a useful active-scan surface, avoiding static assets and noise.
 """
 from __future__ import annotations
 
+import re
 from copy import deepcopy
 from datetime import datetime
 from typing import Any, Dict, Iterable, List, Optional, Tuple
@@ -244,14 +245,116 @@ def campaign_routes(campaign: Dict[str, Any]) -> List[Dict[str, Any]]:
     return routes if isinstance(routes, list) else []
 
 
+def parse_raw_http_headers(raw_text: str) -> Dict[str, str]:
+    """
+    Extrai headers de um request HTTP bruto colado pelo usuario.
+
+    Aceita tanto o request completo ("GET / HTTP/1.1") quanto linhas soltas
+    no formato "Header: valor".
+    """
+    headers: Dict[str, str] = {}
+    if not raw_text:
+        return headers
+
+    current_key = ""
+    for raw_line in raw_text.replace("\r\n", "\n").replace("\r", "\n").split("\n"):
+        line = raw_line.rstrip()
+        if not line:
+            continue
+        if re.match(r"^[A-Z]+\s+\S+\s+HTTP/\d(?:\.\d)?$", line):
+            continue
+        if line[:1] in (" ", "\t") and current_key:
+            headers[current_key] = f"{headers[current_key]} {line.strip()}".strip()
+            continue
+        if ":" not in line:
+            continue
+        key, value = line.split(":", 1)
+        key = key.strip()
+        if not key:
+            continue
+        current_key = key
+        headers[key] = value.strip()
+    return headers
+
+
+def parse_cookie_header(cookie_header: str) -> Dict[str, str]:
+    cookies: Dict[str, str] = {}
+    if not cookie_header:
+        return cookies
+    for part in cookie_header.split(";"):
+        part = part.strip()
+        if "=" in part:
+            ck, cv = part.split("=", 1)
+            cookies[ck.strip()] = cv.strip()
+    return cookies
+
+
+def format_cookie_header(cookies: Dict[str, str]) -> str:
+    return "; ".join(f"{name}={value}" for name, value in cookies.items())
+
+
+def ecidade_window_cookie_name(url: str) -> Optional[str]:
+    if not url:
+        return None
+    path = urlparse(url).path
+    match = re.search(r"/e-cidade/w/(\d+)(?:/|$)", path)
+    if not match:
+        return None
+    return f"ECIDADEWINDOW{match.group(1)}"
+
+
+def adapt_ecidade_window_cookie(cookie_header: str, route_url: str, existing_cookie_header: str = "") -> str:
+    """
+    Ajusta o cookie ECIDADEWINDOWN para coincidir com a janela da URL /w/N.
+
+    Se o Cookie colado trouxer ECIDADEWINDOW5 e a rota for /w/2, a rota recebe
+    ECIDADEWINDOW2 com o mesmo valor. Se o Cookie colado nao trouxer nenhum
+    ECIDADEWINDOWN, preserva o valor especifico ja capturado na rota, quando
+    existir.
+    """
+    target_cookie = ecidade_window_cookie_name(route_url)
+    if not target_cookie:
+        return cookie_header.strip()
+
+    cookies = parse_cookie_header(cookie_header)
+    if not cookies:
+        return cookie_header.strip()
+
+    window_value = cookies.get(target_cookie)
+    if not window_value:
+        for name, value in cookies.items():
+            if re.fullmatch(r"ECIDADEWINDOW\d+", name):
+                window_value = value
+                break
+
+    if not window_value and existing_cookie_header:
+        existing_cookies = parse_cookie_header(existing_cookie_header)
+        window_value = existing_cookies.get(target_cookie)
+
+    filtered_cookies = {
+        name: value
+        for name, value in cookies.items()
+        if not re.fullmatch(r"ECIDADEWINDOW\d+", name)
+    }
+    if window_value:
+        filtered_cookies[target_cookie] = window_value
+
+    return format_cookie_header(filtered_cookies)
+
+
 def update_campaign_auth(
     campaign: Dict[str, Any],
     update_headers: Optional[Dict[str, str]] = None,
     update_cookies: Optional[Dict[str, str]] = None,
+    cookie_header: Optional[str] = None,
+    adapt_ecidade_window: bool = False,
 ) -> int:
     """
     Atualiza headers e/ou cookies especificos em todas as rotas da campanha.
     Ideal para injetar sessoes/tokens renovados sem precisar remapear rotas.
+    Quando cookie_header for informado, substitui o header Cookie inteiro em
+    vez de mesclar com cookies antigos da captura. Com adapt_ecidade_window,
+    ajusta ECIDADEWINDOWN conforme a URL /e-cidade/w/N de cada rota.
     Retorna o numero de rotas atualizadas.
     """
     routes = campaign_routes(campaign)
@@ -272,7 +375,27 @@ def update_campaign_auth(
                     headers[existing_key] = v
                     changed = True
 
-        if update_cookies:
+        if cookie_header is not None:
+            cookie_key = "Cookie"
+            for ek in headers.keys():
+                if ek.lower() == "cookie":
+                    cookie_key = ek
+                    break
+
+            existing_cookie_str = headers.get(cookie_key, "")
+            if adapt_ecidade_window:
+                new_cookie_str = adapt_ecidade_window_cookie(
+                    cookie_header,
+                    route.get("url", ""),
+                    existing_cookie_str,
+                )
+            else:
+                new_cookie_str = cookie_header.strip()
+            if headers.get(cookie_key, "") != new_cookie_str:
+                headers[cookie_key] = new_cookie_str
+                changed = True
+
+        elif update_cookies:
             cookie_key = "Cookie"
             for ek in headers.keys():
                 if ek.lower() == "cookie":
@@ -281,18 +404,12 @@ def update_campaign_auth(
             
             existing_cookie_str = headers.get(cookie_key, "")
             
-            cookie_dict = {}
-            if existing_cookie_str:
-                for part in existing_cookie_str.split(";"):
-                    part = part.strip()
-                    if "=" in part:
-                        ck, cv = part.split("=", 1)
-                        cookie_dict[ck.strip()] = cv.strip()
+            cookie_dict = parse_cookie_header(existing_cookie_str)
 
             for k, v in update_cookies.items():
                 cookie_dict[k] = v
 
-            new_cookie_str = "; ".join([f"{ck}={cv}" for ck, cv in cookie_dict.items()])
+            new_cookie_str = format_cookie_header(cookie_dict)
             if new_cookie_str != existing_cookie_str:
                 headers[cookie_key] = new_cookie_str
                 changed = True
