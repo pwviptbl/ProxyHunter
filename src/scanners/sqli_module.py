@@ -69,7 +69,7 @@ class SqlInjectionModule(IScanModule):
         for payload in error_payloads:
             try:
                 request_to_send = rebuild_attack_request(request_node, injection_point, payload)
-                response = session.send(request_to_send, timeout=session.timeout)
+                response = session.send(request_to_send, timeout=session.timeout, allow_redirects=False)
                 if self._has_sql_error(response.text):
                     snippet = self._extract_error_snippet(response.text)
                     return [
@@ -115,7 +115,7 @@ class SqlInjectionModule(IScanModule):
             try:
                 start = time.time()
                 request_to_send = rebuild_attack_request(request_node, injection_point, payload)
-                session.send(request_to_send, timeout=session.timeout)
+                session.send(request_to_send, timeout=session.timeout, allow_redirects=False)
                 elapsed = time.time() - start
                 if elapsed >= 3:
                     return [
@@ -152,7 +152,7 @@ class SqlInjectionModule(IScanModule):
     def _check_boolean_based(self, session, request_node, injection_point, payload_pairs):
         try:
             base_request = rebuild_attack_request(request_node, injection_point, str(injection_point.get('original_value', '')))
-            base_response = session.send(base_request, timeout=session.timeout)
+            base_response = session.send(base_request, timeout=session.timeout, allow_redirects=False)
             base_body = base_response.text or ""
         except requests.exceptions.RequestException:
             return None
@@ -161,8 +161,8 @@ class SqlInjectionModule(IScanModule):
             try:
                 true_request = rebuild_attack_request(request_node, injection_point, true_payload)
                 false_request = rebuild_attack_request(request_node, injection_point, false_payload)
-                true_response = session.send(true_request, timeout=session.timeout)
-                false_response = session.send(false_request, timeout=session.timeout)
+                true_response = session.send(true_request, timeout=session.timeout, allow_redirects=False)
+                false_response = session.send(false_request, timeout=session.timeout, allow_redirects=False)
             except requests.exceptions.RequestException:
                 continue
 

@@ -50,7 +50,7 @@ class RceOastModule(IScanModule):
                 payload_interactions.append({'payload': payload, 'id': interaction_id})
 
                 request_to_send = rebuild_attack_request(request_node, injection_point, payload)
-                session.send(request_to_send, timeout=session.timeout)
+                session.send(request_to_send, timeout=session.timeout, allow_redirects=False)
             except requests.exceptions.RequestException:
                 continue
             except Exception:

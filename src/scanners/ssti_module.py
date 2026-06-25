@@ -37,7 +37,7 @@ class SstiModule(IScanModule):
         for payload, expected in self.PAYLOADS:
             try:
                 request_to_send = rebuild_attack_request(request_node, injection_point, payload)
-                response = session.send(request_to_send, timeout=session.timeout)
+                response = session.send(request_to_send, timeout=session.timeout, allow_redirects=False)
                 if expected in (response.text or ""):
                     return [
                         Vulnerability(

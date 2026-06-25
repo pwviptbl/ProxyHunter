@@ -49,7 +49,7 @@ class LfiModule(IScanModule):
         for payload in self.PAYLOADS:
             try:
                 request_to_send = rebuild_attack_request(request_node, injection_point, payload)
-                response = session.send(request_to_send, timeout=session.timeout)
+                response = session.send(request_to_send, timeout=session.timeout, allow_redirects=False)
                 body = response.text or ""
                 if any(indicator in body for indicator in self.INDICATORS):
                     return [

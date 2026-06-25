@@ -79,9 +79,9 @@ class ActiveScanner:
         with self._lock:
             if self.use_tor and self.tor_manager:
                 with self.tor_manager.tor_context(target_url=url):
-                    return self.session.request(method, url, headers=headers, data=data, timeout=timeout)
+                    return self.session.request(method, url, headers=headers, data=data, timeout=timeout, allow_redirects=False)
             else:
-                return self.session.request(method, url, headers=headers, data=data, timeout=timeout)
+                return self.session.request(method, url, headers=headers, data=data, timeout=timeout, allow_redirects=False)
 
     def _ensure_logs_dir(self) -> str:
         if not self._logs_dir:
@@ -93,14 +93,22 @@ class ActiveScanner:
             self._logs_dir = base
         return self._logs_dir
 
-    def _dump_request(self, method: str, url: str, headers: Dict[str, str], body: str, context_tag: str, point_name: str, payload: str):
+    def _dump_request(self, method: str, url: str, headers: Dict[str, str], body: str, context_tag: str, point_name: str, payload: str, status_code: Optional[Union[int, str]] = None):
         try:
             logs_dir = self._ensure_logs_dir()
             log_file_path = os.path.join(logs_dir, "active_scanner_requests.log")
             
             with open(log_file_path, 'a', encoding='utf-8') as f:
                 f.write(f"Test: {context_tag} on parameter {point_name}\n")
-                f.write(f"Body: {body}\n")
+                f.write(f"Method: {method}\n")
+                if method.upper() == 'GET':
+                    f.write(f"Sent (GET URL): {url}\n")
+                else:
+                    f.write(f"Sent (URL): {url}\n")
+                    if body:
+                        f.write(f"Body: {body}\n")
+                if status_code is not None:
+                    f.write(f"Response Status: {status_code}\n")
                 f.write("-" * 20 + "\n")
 
         except Exception as e:
@@ -607,6 +615,9 @@ class ActiveScanner:
             if context_tag and isinstance(context_tag, str) and context_tag.startswith('sqli'):
                 payload = self._ensure_comment_space(payload)
 
+            response = None
+            status_code = None
+
             if insertion_point['type'] == 'url':
                 query_params = parse_qs(parsed_url.query, keep_blank_values=True)
                 query_params[insertion_point['name']] = [payload]
@@ -614,8 +625,15 @@ class ActiveScanner:
                 url_parts = list(parsed_url)
                 url_parts[4] = new_query
                 new_url = urlunparse(url_parts)
-                self._dump_request(method, new_url, headers, body if isinstance(body, str) else (body or b'').decode('utf-8', errors='replace'), context_tag, insertion_point.get('name'), payload)
-                response = self._send_request(method, new_url, headers=headers, data=body.encode('utf-8'), timeout=10)
+                try:
+                    response = self._send_request(method, new_url, headers=headers, data=body.encode('utf-8') if isinstance(body, str) else body, timeout=10)
+                    status_code = response.status_code
+                except Exception as req_err:
+                    status_code = f"Error: {req_err}"
+                    raise
+                finally:
+                    body_decoded = body if isinstance(body, str) else (body or b'').decode('utf-8', errors='replace')
+                    self._dump_request(method, new_url, headers, body_decoded, context_tag, insertion_point.get('name'), payload, status_code)
                 
             elif insertion_point['type'] == 'body':
                 body_params = parse_qs(body, keep_blank_values=True)
@@ -635,20 +653,32 @@ class ActiveScanner:
                 # Log opcional de debug
                 log.debug(f"--- SCANNER DEBUG: Enviando body modificado: {new_body_str}")
 
-                self._dump_request(method, url, new_headers, new_body_str, context_tag, insertion_point.get('name'), payload)
-
-                response = self._send_request(
-                    method,
-                    url,
-                    headers=new_headers,
-                    data=new_body_str,
-                    timeout=10,
-                )
+                try:
+                    response = self._send_request(
+                        method,
+                        url,
+                        headers=new_headers,
+                        data=new_body_str,
+                        timeout=10,
+                    )
+                    status_code = response.status_code
+                except Exception as req_err:
+                    status_code = f"Error: {req_err}"
+                    raise
+                finally:
+                    self._dump_request(method, url, new_headers, new_body_str, context_tag, insertion_point.get('name'), payload, status_code)
 
             # Fallback para outros tipos ou se não for url/body
             else:
-                self._dump_request(method, url, headers, body if isinstance(body, str) else (body or b'').decode('utf-8', errors='replace'), context_tag, insertion_point.get('name'), payload)
-                response = self._send_request(method, url, headers=headers, data=body.encode('utf-8'), timeout=10)
+                try:
+                    response = self._send_request(method, url, headers=headers, data=body.encode('utf-8') if isinstance(body, str) else body, timeout=10)
+                    status_code = response.status_code
+                except Exception as req_err:
+                    status_code = f"Error: {req_err}"
+                    raise
+                finally:
+                    body_decoded = body if isinstance(body, str) else (body or b'').decode('utf-8', errors='replace')
+                    self._dump_request(method, url, headers, body_decoded, context_tag, insertion_point.get('name'), payload, status_code)
             
             return response
             

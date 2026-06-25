@@ -36,7 +36,7 @@ class IdorModule(IScanModule):
 
         try:
             baseline_req = rebuild_attack_request(request_node, injection_point, original_value)
-            baseline_resp = session.send(baseline_req, timeout=session.timeout)
+            baseline_resp = session.send(baseline_req, timeout=session.timeout, allow_redirects=False)
         except requests.exceptions.RequestException:
             return []
         except Exception:
@@ -48,7 +48,7 @@ class IdorModule(IScanModule):
         for value in test_values:
             try:
                 test_req = rebuild_attack_request(request_node, injection_point, value)
-                test_resp = session.send(test_req, timeout=session.timeout)
+                test_resp = session.send(test_req, timeout=session.timeout, allow_redirects=False)
                 test_len = len(test_resp.text or "")
 
                 if test_resp.status_code == 200 and base_status == 200:
