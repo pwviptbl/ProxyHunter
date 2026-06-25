@@ -103,7 +103,7 @@ from src.core.logger_config import log
 from src.core.scanner import VulnerabilityScanner
 from src.core.active_scanner import ActiveScanner
 from src.core.oast_client import OASTClient
-from src.core.campaign import build_campaign, campaign_routes
+from src.core.campaign import build_campaign, campaign_routes, update_campaign_auth
 
 
 CAMPAIGN_SCAN_TYPES = {
@@ -534,6 +534,43 @@ def campaign_import(source_file, out_file):
     click.echo(click.style(f"Campanha importada para: {out_file}", fg="green"))
     click.echo(f"- Nome: {campaign.get('name', '')}")
     click.echo(f"- Rotas testaveis: {len(routes)}")
+
+
+@campaign_group.command('update-auth')
+@click.option('--file', 'campaign_file', default="logs/campaign.json", show_default=True, help="Arquivo da campanha.")
+@click.option('--cookie', 'cookies', multiple=True, help="Cookie para injetar/atualizar. Ex: --cookie 'PHPSESSID=novo123'")
+@click.option('--header', 'headers', multiple=True, help="Header para injetar/atualizar. Ex: --header 'Authorization: Bearer novo123'")
+def campaign_update_auth(campaign_file, cookies, headers):
+    """Atualiza/injeta cookies e headers em todas as rotas da campanha."""
+    try:
+        campaign = _load_json(campaign_file)
+    except FileNotFoundError:
+        click.echo(f"Arquivo nao encontrado: {campaign_file}")
+        return
+
+    update_headers = {}
+    for h in headers:
+        if ':' in h:
+            k, v = h.split(':', 1)
+            update_headers[k.strip()] = v.strip()
+            
+    update_cookies = {}
+    for c in cookies:
+        if '=' in c:
+            k, v = c.split('=', 1)
+            update_cookies[k.strip()] = v.strip()
+
+    if not update_headers and not update_cookies:
+        click.echo("Nenhum cookie ou header fornecido para atualizacao. Use --cookie ou --header.")
+        return
+
+    updated = update_campaign_auth(campaign, update_headers, update_cookies)
+    if updated > 0:
+        _save_json(campaign_file, campaign)
+        click.echo(click.style(f"Campanha atualizada! Sessoes/Tokens injetados em {updated} rotas.", fg="green"))
+    else:
+        click.echo("Nenhuma rota foi atualizada (verifique se a campanha esta vazia).")
+
 
 
 @campaign_group.command('scan')

@@ -242,3 +242,66 @@ def build_campaign(
 def campaign_routes(campaign: Dict[str, Any]) -> List[Dict[str, Any]]:
     routes = campaign.get("routes") if isinstance(campaign, dict) else []
     return routes if isinstance(routes, list) else []
+
+
+def update_campaign_auth(
+    campaign: Dict[str, Any],
+    update_headers: Optional[Dict[str, str]] = None,
+    update_cookies: Optional[Dict[str, str]] = None,
+) -> int:
+    """
+    Atualiza headers e/ou cookies especificos em todas as rotas da campanha.
+    Ideal para injetar sessoes/tokens renovados sem precisar remapear rotas.
+    Retorna o numero de rotas atualizadas.
+    """
+    routes = campaign_routes(campaign)
+    updated = 0
+
+    for route in routes:
+        headers = route.get("request_headers") or route.get("headers") or {}
+        changed = False
+
+        if update_headers:
+            for k, v in update_headers.items():
+                existing_key = k
+                for ek in headers.keys():
+                    if ek.lower() == k.lower():
+                        existing_key = ek
+                        break
+                if headers.get(existing_key) != v:
+                    headers[existing_key] = v
+                    changed = True
+
+        if update_cookies:
+            cookie_key = "Cookie"
+            for ek in headers.keys():
+                if ek.lower() == "cookie":
+                    cookie_key = ek
+                    break
+            
+            existing_cookie_str = headers.get(cookie_key, "")
+            
+            cookie_dict = {}
+            if existing_cookie_str:
+                for part in existing_cookie_str.split(";"):
+                    part = part.strip()
+                    if "=" in part:
+                        ck, cv = part.split("=", 1)
+                        cookie_dict[ck.strip()] = cv.strip()
+
+            for k, v in update_cookies.items():
+                cookie_dict[k] = v
+
+            new_cookie_str = "; ".join([f"{ck}={cv}" for ck, cv in cookie_dict.items()])
+            if new_cookie_str != existing_cookie_str:
+                headers[cookie_key] = new_cookie_str
+                changed = True
+
+        if changed:
+            if "request_headers" in route:
+                route["request_headers"] = headers
+            else:
+                route["headers"] = headers
+            updated += 1
+
+    return updated

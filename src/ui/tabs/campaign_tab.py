@@ -31,7 +31,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtGui import QAction
 
 from src.core.active_scanner import ActiveScanner
-from src.core.campaign import build_campaign, campaign_routes
+from src.core.campaign import build_campaign, campaign_routes, update_campaign_auth
 from src.core.history import RequestHistory
 from src.core.scanner import VulnerabilityScanner
 
@@ -136,6 +136,53 @@ class PathPickerDialog(QDialog):
         if self.save_mode and not path.lower().endswith(self.extension):
             path = f"{path}{self.extension}"
         return path
+
+
+class UpdateAuthDialog(QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Injetar Sessão / Atualizar Headers")
+        self.setWindowModality(Qt.WindowModality.ApplicationModal)
+        self.resize(500, 200)
+
+        layout = QVBoxLayout(self)
+        
+        layout.addWidget(QLabel("Informe novos Cookies e/ou Headers para atualizar em todas as rotas da campanha atual."))
+        layout.addWidget(QLabel("Deixe em branco o que não desejar alterar."))
+
+        self.cookie_input = QLineEdit()
+        self.cookie_input.setPlaceholderText("Ex: PHPSESSID=novo_id; ECIDADEWINDOWMAIN=abc")
+        layout.addWidget(QLabel("Novo valor de Cookie(s):"))
+        layout.addWidget(self.cookie_input)
+
+        self.auth_input = QLineEdit()
+        self.auth_input.setPlaceholderText("Ex: Bearer novo_token_aqui")
+        layout.addWidget(QLabel("Novo valor para header Authorization:"))
+        layout.addWidget(self.auth_input)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    def get_auth_data(self):
+        cookies = self.cookie_input.text().strip()
+        auth = self.auth_input.text().strip()
+        
+        update_cookies = {}
+        update_headers = {}
+        
+        if cookies:
+            for part in cookies.split(";"):
+                if "=" in part:
+                    k, v = part.split("=", 1)
+                    update_cookies[k.strip()] = v.strip()
+                    
+        if auth:
+            update_headers["Authorization"] = auth
+            
+        return update_headers, update_cookies
+
 
 
 class CampaignScanWorker:
@@ -317,6 +364,10 @@ class CampaignTab(QWidget):
         import_button = QPushButton("Importar")
         import_button.clicked.connect(self.import_campaign)
         actions.addWidget(import_button)
+
+        update_auth_button = QPushButton("Injetar Sessão")
+        update_auth_button.clicked.connect(self.update_campaign_auth_gui)
+        actions.addWidget(update_auth_button)
 
         export_button = QPushButton("Exportar")
         export_button.clicked.connect(self.export_campaign)
@@ -541,6 +592,25 @@ class CampaignTab(QWidget):
         self.scope_input.setText(",".join(campaign.get("scope", []) or []))
         self._refresh_campaign_view()
         self._autosave_campaign()
+
+    def update_campaign_auth_gui(self):
+        if not self.campaign:
+            QMessageBox.information(self, "Atualizar Sessão", "Nenhuma campanha carregada. Importe ou inicie uma captura primeiro.")
+            return
+            
+        dialog = UpdateAuthDialog(self)
+        if dialog.exec():
+            update_headers, update_cookies = dialog.get_auth_data()
+            if not update_headers and not update_cookies:
+                return
+                
+            updated = update_campaign_auth(self.campaign, update_headers, update_cookies)
+            if updated > 0:
+                self._refresh_campaign_view()
+                self._autosave_campaign()
+                QMessageBox.information(self, "Sessão Atualizada", f"Sessão injetada em {updated} rotas da campanha.")
+            else:
+                QMessageBox.information(self, "Sessão", "Nenhuma rota atualizada (verifique se os valores ja eram os mesmos).")
 
     def export_campaign(self):
         if not self.campaign:
