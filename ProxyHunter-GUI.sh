@@ -23,11 +23,13 @@ if ! python3 -c "import ensurepip" >/dev/null 2>&1; then
     fi
 fi
 
-# Modo seguro para contornar crashes de drivers/GL
-if [ "${PROXYHUNTER_SAFE_MODE}" = "1" ]; then
-    echo "🛡️  Modo seguro ativo: forçando renderização por software..."
-    export QT_OPENGL=software
-    export LIBGL_ALWAYS_SOFTWARE=1
+# Modo seguro para contornar crashes de drivers/GL no Linux
+if [ "$(uname)" = "Linux" ]; then
+    if [ -z "${PROXYHUNTER_SAFE_MODE}" ] || [ "${PROXYHUNTER_SAFE_MODE}" = "1" ]; then
+        echo "🛡️  Modo seguro ativo (Linux): forçando renderização por software para evitar crashes de GL..."
+        export QT_OPENGL=software
+        export LIBGL_ALWAYS_SOFTWARE=1
+    fi
 fi
 
 # Cria o ambiente virtual se não existir
