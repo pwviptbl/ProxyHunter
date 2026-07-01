@@ -326,9 +326,9 @@ class InterceptAddon:
             try:
                 ui_q = getattr(self.config, 'ui_queue', None)
                 if ui_q:
-                    # Envia a cópia dos dados básicos para a UI
-                    entry = self.history.get_history()[-1]
-                    ui_q.put({"type": "new_history_entry", "data": entry})
+                    entry = self.history.get_latest_entry()
+                    if entry:
+                        ui_q.put({"type": "new_history_entry", "data": entry})
             except Exception:
                 # Não falha o addon se a notificação da UI não funcionar
                 pass

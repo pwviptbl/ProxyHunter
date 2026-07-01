@@ -28,7 +28,7 @@ from PySide6.QtWidgets import (
     QWidget,
     QMenu,
 )
-from PySide6.QtGui import QAction
+from PySide6.QtGui import QAction, QKeySequence, QShortcut
 
 from src.core.active_scanner import ActiveScanner
 from src.core.campaign import (
@@ -476,6 +476,12 @@ class CampaignTab(QWidget):
         self.table.selectionModel().selectionChanged.connect(self._on_selection_changed)
         self.table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.table.customContextMenuRequested.connect(self._show_context_menu)
+
+        # Shortcut to delete a selected route with the Delete key
+        self.delete_shortcut = QShortcut(QKeySequence(Qt.Key.Key_Delete), self.table)
+        self.delete_shortcut.setContext(Qt.ShortcutContext.WidgetShortcut)
+        self.delete_shortcut.activated.connect(self.remove_selected_route)
+
         layout.addWidget(self.table)
         group.setLayout(layout)
         parent.addWidget(group)
@@ -835,6 +841,12 @@ class CampaignTab(QWidget):
         self._update_campaign_route_stats()
         self._refresh_campaign_view()
         self._autosave_campaign()
+
+        # Select the next row (or the last row if we deleted the last one) to facilitate quick deletion
+        total_rows = self.model.rowCount()
+        if total_rows > 0:
+            next_row = min(row, total_rows - 1)
+            self.table.selectRow(next_row)
 
     def _show_context_menu(self, pos):
         row = self._selected_source_row()

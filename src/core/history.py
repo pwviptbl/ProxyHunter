@@ -1,7 +1,87 @@
 from datetime import datetime
 import copy
+import os
 import threading
 from mitmproxy import http
+
+
+DEFAULT_MAX_REQUEST_BODY_BYTES = 256 * 1024
+DEFAULT_MAX_RESPONSE_BODY_BYTES = 512 * 1024
+
+BINARY_CONTENT_TYPES = (
+    "application/octet-stream",
+    "application/pdf",
+    "application/zip",
+    "application/x-",
+    "audio/",
+    "font/",
+    "image/",
+    "video/",
+)
+
+
+def _env_int(name: str, default: int) -> int:
+    try:
+        value = int(os.getenv(name, str(default)))
+        return max(0, value)
+    except (TypeError, ValueError):
+        return default
+
+
+MAX_REQUEST_BODY_BYTES = _env_int("PROXYHUNTER_MAX_REQUEST_BODY_BYTES", DEFAULT_MAX_REQUEST_BODY_BYTES)
+MAX_RESPONSE_BODY_BYTES = _env_int("PROXYHUNTER_MAX_RESPONSE_BODY_BYTES", DEFAULT_MAX_RESPONSE_BODY_BYTES)
+
+
+def _content_type(headers) -> str:
+    try:
+        return (headers.get("content-type", "") or "").split(";", 1)[0].strip().lower()
+    except Exception:
+        return ""
+
+
+def _is_binary_content_type(content_type: str) -> bool:
+    return any(content_type == item.rstrip("/") or content_type.startswith(item) for item in BINARY_CONTENT_TYPES)
+
+
+def _decode_body_for_history(content, headers, max_bytes: int):
+    """Decode bounded textual content for GUI/history without retaining huge payloads."""
+    if not content:
+        return "", {
+            "truncated": False,
+            "stored_bytes": 0,
+            "original_bytes": 0,
+            "content_type": _content_type(headers),
+            "binary_omitted": False,
+        }
+
+    original_bytes = len(content)
+    content_type = _content_type(headers)
+
+    if _is_binary_content_type(content_type):
+        return (
+            f"[conteudo binario omitido: {original_bytes} bytes, content-type: {content_type or 'desconhecido'}]",
+            {
+                "truncated": False,
+                "stored_bytes": 0,
+                "original_bytes": original_bytes,
+                "content_type": content_type,
+                "binary_omitted": True,
+            },
+        )
+
+    limited = content[:max_bytes] if max_bytes else b""
+    truncated = original_bytes > len(limited)
+    text = limited.decode("utf-8", errors="replace")
+    if truncated:
+        text += f"\n\n[truncado pelo ProxyHunter: exibindo {len(limited)} de {original_bytes} bytes]"
+
+    return text, {
+        "truncated": truncated,
+        "stored_bytes": len(limited),
+        "original_bytes": original_bytes,
+        "content_type": content_type,
+        "binary_omitted": False,
+    }
 
 
 class RequestHistory:
@@ -40,6 +120,17 @@ class RequestHistory:
             except Exception:
                 elapsed_ms = None
 
+            request_body, request_body_meta = _decode_body_for_history(
+                request.content,
+                request.headers,
+                MAX_REQUEST_BODY_BYTES,
+            )
+            response_body, response_body_meta = _decode_body_for_history(
+                response.content if response else b"",
+                response.headers if response else {},
+                MAX_RESPONSE_BODY_BYTES,
+            )
+
             # Extrai informações da requisição
             entry = {
                 'id': self.current_id,
@@ -51,9 +142,11 @@ class RequestHistory:
                 'status': response.status_code if response else 0,
                 'elapsed_ms': elapsed_ms,
                 'request_headers': dict(request.headers),
-                'request_body': request.content.decode('utf-8', errors='ignore') if request.content else '',
+                'request_body': request_body,
+                'request_body_meta': request_body_meta,
                 'response_headers': dict(response.headers) if response else {},
-                'response_body': response.content.decode('utf-8', errors='ignore') if response and response.content else '',
+                'response_body': response_body,
+                'response_body_meta': response_body_meta,
                 'vulnerabilities': vulnerabilities or [],  # Adiciona lista de vulnerabilidades
             }
 
@@ -98,6 +191,13 @@ class RequestHistory:
         """Retorna todo o histórico"""
         with self._lock:
             return copy.deepcopy(self.history)
+
+    def get_latest_entry(self):
+        """Retorna a entrada mais recente do histórico."""
+        with self._lock:
+            if not self.history:
+                return None
+            return copy.deepcopy(self.history[-1])
 
     def clear_history(self):
         """Limpa o histórico"""
