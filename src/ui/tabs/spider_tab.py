@@ -33,7 +33,7 @@ class SpiderTab(QWidget):
         self._setup_results_section(layout)
 
         # Timer para atualizar estatísticas
-        self.stats_timer = QTimer()
+        self.stats_timer = QTimer(self)
         self.stats_timer.timeout.connect(self._update_stats)
         self.stats_timer.start(2000)  # Atualiza a cada 2 segundos
 

@@ -17,6 +17,7 @@ from .oast_client import OASTClient
 from .technology_manager import TechnologyManager
 from .technology_detector import TechnologyDetector
 from . import target_processor
+from .json_path import parse_json_value, set_json_path
 
 
 class InterceptAddon:
@@ -106,12 +107,7 @@ class InterceptAddon:
     @staticmethod
     def _parse_json_value(value: str):
         """Tenta converter uma string para um tipo primitivo ou objeto JSON."""
-        try:
-            import json
-            return json.loads(value)
-        except:
-            # Se não for JSON válido (ex: uma string simples sem aspas), retorna como está
-            return value
+        return parse_json_value(value)
 
     def request(self, flow: http.HTTPFlow) -> None:
         """Intercepta requisições HTTP"""
@@ -240,16 +236,9 @@ class InterceptAddon:
                             import json
                             body = json.loads(request.content.decode('utf-8', errors='ignore'))
                             if isinstance(body, dict):
-                                # Suporta caminhos aninhados com dot notation (ex: "data.username")
-                                def set_nested_value(obj, key_path, value):
-                                    keys = key_path.split('.')
-                                    for key in keys[:-1]:
-                                        obj = obj.setdefault(key, {})
-                                    obj[keys[-1]] = value
-                                
                                 # Converte o valor para o tipo JSON correto (ex: "false" -> False booleano)
                                 parsed_value = self._parse_json_value(rule['param_value'])
-                                set_nested_value(body, rule['param_name'], parsed_value)
+                                set_json_path(body, rule['param_name'], parsed_value)
                                 new_body = json.dumps(body)
                                 request.content = new_body.encode('utf-8')
                                 log.info(f"Regra POST aplicada (JSON): '{rule['param_name']}' -> {parsed_value} ({type(parsed_value).__name__}) em {request.pretty_url}")
@@ -282,16 +271,9 @@ class InterceptAddon:
                             import json
                             body = json.loads(flow.response.content.decode('utf-8', errors='ignore'))
                             if isinstance(body, dict):
-                                # Suporta caminhos aninhados com dot notation (ex: "data.primeiro_acesso")
-                                def set_nested_value(obj, key_path, value):
-                                    keys = key_path.split('.')
-                                    for key in keys[:-1]:
-                                        obj = obj.setdefault(key, {})
-                                    obj[keys[-1]] = value
-                                
                                 # Converte o valor para o tipo JSON correto (ex: "false" -> False booleano)
                                 parsed_value = self._parse_json_value(rule['param_value'])
-                                set_nested_value(body, rule['param_name'], parsed_value)
+                                set_json_path(body, rule['param_name'], parsed_value)
                                 new_body = json.dumps(body)
                                 flow.response.content = new_body.encode('utf-8')
                                 log.info(f"Regra RESPONSE aplicada (JSON): '{rule['param_name']}' -> {parsed_value} ({type(parsed_value).__name__}) em {flow.request.pretty_url}")

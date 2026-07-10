@@ -132,7 +132,7 @@ class WebSocketTab(QWidget):
         main_splitter.setSizes([300, 300, 200])
 
         # Timer para atualizar a lista de conexões periodicamente
-        self.update_timer = QTimer()
+        self.update_timer = QTimer(self)
         self.update_timer.timeout.connect(self._update_websocket_list)
         self.update_timer.start(2000)  # Atualiza a cada 2 segundos
 

@@ -14,14 +14,21 @@ class CookieManager:
         self.cookie_jar: Dict[str, str] = {}
         # Callback para notificar a UI sobre atualizações
         self.ui_callback: Callable[[], None] | None = None
+        self.ui_queue = None
+
+    def set_ui_queue(self, ui_queue):
+        """Define a fila para notificações da UI."""
+        self.ui_queue = ui_queue
 
     def set_ui_callback(self, callback: Callable[[], None]):
         """Define um callback para notificar a UI sobre atualizações."""
         self.ui_callback = callback
 
     def _notify_ui(self):
-        """Chama o callback da UI se ele estiver definido."""
-        if self.ui_callback:
+        """Chama o callback da UI ou envia para a fila."""
+        if self.ui_queue:
+            self.ui_queue.put({"type": "refresh_cookies", "data": None})
+        elif self.ui_callback:
             self.ui_callback()
 
     def parse_and_store_cookies(self, host: str, request_headers: Dict, response_headers: Dict):

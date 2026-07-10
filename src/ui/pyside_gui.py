@@ -85,6 +85,7 @@ class ProxyGUI(QMainWindow):
         self.history.set_ui_queue(self.ui_queue)
         self.websocket_history.set_ui_queue(self.ui_queue)
         self.spider.set_ui_queue(self.ui_queue)
+        self.cookie_manager.set_ui_queue(self.ui_queue)
         self.browser_manager = BrowserManager(
             proxy_port=self.config.get_port(),
             ui_queue=self.ui_queue
@@ -108,7 +109,7 @@ class ProxyGUI(QMainWindow):
         self.update_ui_state()
 
         # Inicia o timer para processar a fila de eventos da UI
-        self.ui_queue_timer = QTimer()
+        self.ui_queue_timer = QTimer(self)
         self.ui_queue_timer.timeout.connect(self._process_ui_queue)
         self.ui_queue_timer.start(100) # Verifica a cada 100ms
 
@@ -465,6 +466,9 @@ class ProxyGUI(QMainWindow):
         elif msg_type == "refresh_vulnerabilities":
             # Sinal explícito para atualizar vulnerabilidades (ex: após scan ativo)
             self.scanner_tab.refresh_vulnerabilities()
+        elif msg_type == "refresh_cookies":
+            if hasattr(self, 'cookie_jar_tab'):
+                self.cookie_jar_tab._refresh_cookie_views()
         elif msg_type == "browser_install_start":
             self.control_widget.set_browser_installing()
         elif msg_type == "browser_install_finish":

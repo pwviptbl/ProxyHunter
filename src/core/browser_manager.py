@@ -7,6 +7,15 @@ from playwright.async_api import async_playwright, Playwright, Browser, Page
 from threading import Lock, Thread
 import ctypes
 import platform
+from PySide6.QtCore import QThread
+
+class PlaywrightThread(QThread):
+    def __init__(self, run_fn):
+        super().__init__()
+        self.run_fn = run_fn
+
+    def run(self):
+        self.run_fn()
 
 class BrowserManager:
     """
@@ -168,7 +177,7 @@ class BrowserManager:
     def launch_browser(self):
         """Ponto de entrada síncrono para lançar o navegador."""
         with self._lock:
-            if self._launching or (self.browser_thread and self.browser_thread.is_alive()):
+            if self._launching or (self.browser_thread and self.browser_thread.isRunning()):
                 print("[DEBUG] Playwright thread: lançamento ignorado, navegador já está em execução.")
                 return False
             self._launching = True
@@ -206,7 +215,7 @@ class BrowserManager:
                     self.playwright_loop = None
                 self._notify_ui("browser_closed")
 
-        thread = Thread(target=run_async, daemon=True)
+        thread = PlaywrightThread(run_async)
         self.browser_thread = thread
         thread.start()
         return True
@@ -224,7 +233,7 @@ class BrowserManager:
 
     async def _close_browser_async(self):
         """Fecha o navegador e o playwright de forma assíncrona."""
-        if self.browser and not self.browser.is_closed():
+        if self.browser and self.browser.is_connected:
             await self.browser.close()
         if self.playwright:
             await self.playwright.stop()
@@ -235,14 +244,14 @@ class BrowserManager:
         self.playwright = None
 
         # Para o loop de eventos
-        loop = asyncio.get_event_loop()
-        if loop.is_running():
+        loop = self.playwright_loop
+        if loop and loop.is_running():
             loop.stop()
 
     async def _cleanup_after_launch_error(self):
         """Libera recursos quando o Chromium falha antes de ficar pronto."""
         try:
-            if self.browser and not self.browser.is_closed():
+            if self.browser and self.browser.is_connected:
                 await self.browser.close()
         except Exception:
             pass
@@ -258,6 +267,8 @@ class BrowserManager:
     def close(self):
         """Ponto de entrada síncrono para fechar tudo."""
         self.close_browser_sync()
+        if self.browser_thread:
+            self.browser_thread.wait(3000)  # Wait up to 3 seconds
 
     def _notify_ui(self, msg_type, data=None):
         if self.ui_queue:
