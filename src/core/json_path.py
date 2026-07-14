@@ -10,7 +10,7 @@ def parse_json_value(value):
 
 
 def set_json_path(document, key_path, value):
-    """Set a value using dot notation, including numeric list indexes."""
+    """Set a value using dot notation, creating missing objects and list items."""
     keys = key_path.split('.')
     if not key_path or any(key == '' for key in keys):
         raise ValueError("Caminho JSON vazio ou invalido")
@@ -23,13 +23,15 @@ def set_json_path(document, key_path, value):
             if not key.isdigit():
                 raise ValueError(f"O segmento '{key}' deve ser um indice numerico")
             index = int(key)
-            if index >= len(current):
-                raise IndexError(
-                    f"Indice {index} fora do intervalo da lista (tamanho {len(current)})"
-                )
             if is_last:
+                while len(current) <= index:
+                    current.append(None)
                 current[index] = value
                 return
+
+            next_key = keys[position + 1]
+            while len(current) <= index:
+                current.append([] if next_key.isdigit() else {})
             current = current[index]
             continue
 

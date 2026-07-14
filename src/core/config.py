@@ -199,6 +199,28 @@ class InterceptConfig:
             return self.save_config()
         return False
 
+    def update_rule(self, index, host, path, param_name, param_value, rule_type='request'):
+        """Atualiza uma regra mantendo seu estado de ativação."""
+        if not 0 <= index < len(self.rules):
+            return False, "Regra não encontrada."
+        if not all(str(val).strip() for val in [host, path, param_name, param_value]):
+            return False, "Todos os campos devem ser preenchidos."
+
+        previous_rule = dict(self.rules[index])
+        self.rules[index] = {
+            'type': rule_type,
+            'host': str(host).strip(),
+            'path': str(path).strip(),
+            'param_name': str(param_name).strip(),
+            'param_value': str(param_value).strip(),
+            'enabled': previous_rule.get('enabled', True)
+        }
+        if self.save_config():
+            return True, "Regra atualizada com sucesso!"
+
+        self.rules[index] = previous_rule
+        return False, "Erro ao salvar a configuração."
+
     def get_rules(self):
         """Retorna todas as regras"""
         return self.rules

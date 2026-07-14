@@ -18,6 +18,7 @@ from .technology_manager import TechnologyManager
 from .technology_detector import TechnologyDetector
 from . import target_processor
 from .json_path import parse_json_value, set_json_path
+from .multipart import upsert_multipart_form_field
 
 
 class InterceptAddon:
@@ -178,16 +179,17 @@ class InterceptAddon:
             path_match = True if not normalized_rule_path else request.path.startswith(normalized_rule_path)
 
             if host_match and path_match:
-                # Modifica ou adiciona parâmetros na query string (GET)
-                query_dict = dict(request.query)
-                query_dict[rule['param_name']] = rule['param_value']
-                request.query.clear()
-                for key, value in query_dict.items():
-                    request.query[key] = value
-                log.info(f"Regra GET aplicada: '{rule['param_name']}' -> '{rule['param_value']}' em {request.pretty_url}")
+                # Modifica ou adiciona parâmetros na query string apenas em GET.
+                if request.method == "GET":
+                    query_dict = dict(request.query)
+                    query_dict[rule['param_name']] = rule['param_value']
+                    request.query.clear()
+                    for key, value in query_dict.items():
+                        request.query[key] = value
+                    log.info(f"Regra GET aplicada: '{rule['param_name']}' -> '{rule['param_value']}' em {request.pretty_url}")
 
-                # Modifica ou adiciona parâmetros no corpo (POST)
-                if request.method == "POST" and request.content:
+                # Modifica ou adiciona parâmetros no corpo de métodos que enviam payload.
+                if request.method in {"POST", "PUT", "PATCH"} and request.content:
                     content_type = request.headers.get("content-type", "")
 
                     if "application/x-www-form-urlencoded" in content_type:
@@ -200,7 +202,7 @@ class InterceptAddon:
                         # Reconstrói o corpo
                         new_body = urlencode(params, doseq=True)
                         request.content = new_body.encode('utf-8')
-                        log.info(f"Regra POST aplicada: '{rule['param_name']}' -> '{rule['param_value']}' em {request.pretty_url}")
+                        log.info(f"Regra {request.method} aplicada: '{rule['param_name']}' -> '{rule['param_value']}' em {request.pretty_url}")
 
                     elif "multipart/form-data" in content_type:
                         # Para dados multipart/form-data
@@ -209,22 +211,16 @@ class InterceptAddon:
                             log.warning(f"Boundary não encontrado para multipart/form-data em {request.pretty_url}")
                         else:
                             log.info(f"Processando multipart com boundary: {boundary}")
-                            # Método alternativo: usar regex para substituir diretamente
                             try:
                                 body_str = request.content.decode('utf-8', errors='ignore')
-                                import re
-                                # Padrão para encontrar o campo username
-                                pattern = rf'(--{re.escape(boundary)}\r?\nContent-Disposition: form-data; name="username"\r?\n\r?\n)([^\r\n]*)(\r?\n)'
-                                match = re.search(pattern, body_str)
-                                if match:
-                                    prefix = match.group(1)
-                                    old_value = match.group(2)
-                                    suffix = match.group(3)
-                                    new_body = body_str.replace(f"{prefix}{old_value}{suffix}", f"{prefix}{rule['param_value']}{suffix}")
+                                new_body, replacements = upsert_multipart_form_field(
+                                    body_str, boundary, rule['param_name'], rule['param_value']
+                                )
+                                if replacements:
                                     request.content = new_body.encode('utf-8')
-                                    log.info(f"Regra POST aplicada (multipart regex): '{rule['param_name']}' '{old_value}' -> '{rule['param_value']}' em {request.pretty_url}")
+                                    log.info(f"Regra {request.method} aplicada (multipart): '{rule['param_name']}' -> '{rule['param_value']}' em {request.pretty_url}")
                                 else:
-                                    log.warning(f"Parâmetro '{rule['param_name']}' não encontrado via regex no multipart")
+                                    log.warning(f"Parâmetro '{rule['param_name']}' não encontrado no multipart")
                             except Exception as e:
                                 log.error(f"Erro ao processar multipart/form-data com regex em {request.pretty_url}: {e}")
                                 import traceback
@@ -235,13 +231,13 @@ class InterceptAddon:
                         try:
                             import json
                             body = json.loads(request.content.decode('utf-8', errors='ignore'))
-                            if isinstance(body, dict):
+                            if isinstance(body, (dict, list)):
                                 # Converte o valor para o tipo JSON correto (ex: "false" -> False booleano)
                                 parsed_value = self._parse_json_value(rule['param_value'])
                                 set_json_path(body, rule['param_name'], parsed_value)
                                 new_body = json.dumps(body)
                                 request.content = new_body.encode('utf-8')
-                                log.info(f"Regra POST aplicada (JSON): '{rule['param_name']}' -> {parsed_value} ({type(parsed_value).__name__}) em {request.pretty_url}")
+                                log.info(f"Regra {request.method} aplicada (JSON): '{rule['param_name']}' -> {parsed_value} ({type(parsed_value).__name__}) em {request.pretty_url}")
                         except Exception as e:
                             log.error(f"Erro ao processar application/json em {request.pretty_url}: {e}")
 
@@ -270,7 +266,7 @@ class InterceptAddon:
                         try:
                             import json
                             body = json.loads(flow.response.content.decode('utf-8', errors='ignore'))
-                            if isinstance(body, dict):
+                            if isinstance(body, (dict, list)):
                                 # Converte o valor para o tipo JSON correto (ex: "false" -> False booleano)
                                 parsed_value = self._parse_json_value(rule['param_value'])
                                 set_json_path(body, rule['param_name'], parsed_value)

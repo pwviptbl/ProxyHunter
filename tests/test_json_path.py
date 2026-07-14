@@ -21,9 +21,19 @@ class JsonPathTest(unittest.TestCase):
             "500.00",
         )
 
-    def test_rejects_out_of_range_index(self):
-        with self.assertRaises(IndexError):
-            set_json_path({"processes": []}, "processes.0.id", 999)
+    def test_creates_first_object_in_empty_array(self):
+        body = {"users": []}
+
+        set_json_path(body, "users.0.id", 7)
+
+        self.assertEqual(body, {"users": [{"id": 7}]})
+
+    def test_expands_array_for_requested_index(self):
+        body = {"users": []}
+
+        set_json_path(body, "users.2.role", "admin")
+
+        self.assertEqual(body["users"], [{}, {}, {"role": "admin"}])
 
     def test_parses_rule_value_types(self):
         self.assertIs(parse_json_value("true"), True)

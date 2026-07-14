@@ -11,6 +11,7 @@ class RulesTab(QWidget):
     def __init__(self, config: InterceptConfig):
         super().__init__()
         self.config = config
+        self._editing_rule_index = None
 
         rules_layout = QVBoxLayout(self)
 
@@ -26,7 +27,7 @@ class RulesTab(QWidget):
         self._refresh_rules_list()
 
     def _setup_form(self, layout):
-        add_rule_group = QGroupBox("Adicionar Regra de Interceptação")
+        self.rule_form_group = QGroupBox("Adicionar Regra de Interceptação")
         add_rule_layout = QGridLayout()
         self.host_entry = QLineEdit("exemplo.com")
         self.path_entry = QLineEdit("/contato")
@@ -34,8 +35,11 @@ class RulesTab(QWidget):
         self.param_value_entry = QLineEdit("teste1")
         self.type_combo = QComboBox()
         self.type_combo.addItems(["request", "response"])
-        add_button = QPushButton("Adicionar Regra")
-        add_button.clicked.connect(self.add_rule)
+        self.save_rule_button = QPushButton("Adicionar Regra")
+        self.save_rule_button.clicked.connect(self.save_rule)
+        self.cancel_edit_button = QPushButton("Cancelar Edição")
+        self.cancel_edit_button.clicked.connect(self.cancel_edit)
+        self.cancel_edit_button.hide()
 
         add_rule_layout.addWidget(QLabel("Tipo:"), 0, 0)
         add_rule_layout.addWidget(self.type_combo, 0, 1)
@@ -47,10 +51,11 @@ class RulesTab(QWidget):
         add_rule_layout.addWidget(self.param_name_entry, 1, 3)
         add_rule_layout.addWidget(QLabel("Novo Valor:"), 2, 0)
         add_rule_layout.addWidget(self.param_value_entry, 2, 1)
-        add_rule_layout.addWidget(add_button, 2, 2, 1, 2)
+        add_rule_layout.addWidget(self.save_rule_button, 2, 2)
+        add_rule_layout.addWidget(self.cancel_edit_button, 2, 3)
 
-        add_rule_group.setLayout(add_rule_layout)
-        layout.addWidget(add_rule_group)
+        self.rule_form_group.setLayout(add_rule_layout)
+        layout.addWidget(self.rule_form_group)
 
     def _setup_table(self, layout):
         rules_list_group = QGroupBox("Regras Configuradas")
@@ -73,24 +78,56 @@ class RulesTab(QWidget):
         toggle_button.clicked.connect(self.toggle_rule)
         duplicate_button = QPushButton("Duplicar Regra")
         duplicate_button.clicked.connect(self.duplicate_rule)
+        edit_button = QPushButton("Editar Regra")
+        edit_button.clicked.connect(self.edit_rule)
 
         action_buttons_layout.addWidget(remove_button)
         action_buttons_layout.addWidget(toggle_button)
         action_buttons_layout.addWidget(duplicate_button)
+        action_buttons_layout.addWidget(edit_button)
         action_buttons_layout.addStretch()
         layout.addLayout(action_buttons_layout)
 
-    def add_rule(self):
-        success, message = self.config.add_rule(
+    def save_rule(self):
+        rule_data = (
             self.host_entry.text(), self.path_entry.text(),
             self.param_name_entry.text(), self.param_value_entry.text(),
             self.type_combo.currentText()
         )
+        if self._editing_rule_index is None:
+            success, message = self.config.add_rule(*rule_data)
+        else:
+            success, message = self.config.update_rule(self._editing_rule_index, *rule_data)
         if success:
             QMessageBox.information(self, "Sucesso", message)
             self._refresh_rules_list()
+            self.cancel_edit()
         else:
             QMessageBox.warning(self, "Erro de Validação", message)
+
+    def edit_rule(self):
+        selected_indexes = self.rules_table.selectionModel().selectedRows()
+        if not selected_indexes:
+            QMessageBox.warning(self, "Aviso", "Selecione uma regra para editar.")
+            return
+
+        self._editing_rule_index = selected_indexes[0].row()
+        rule = self.config.get_rules()[self._editing_rule_index]
+        self.host_entry.setText(rule.get('host', ''))
+        self.path_entry.setText(rule.get('path', ''))
+        self.param_name_entry.setText(rule.get('param_name', ''))
+        self.param_value_entry.setText(rule.get('param_value', ''))
+        self.type_combo.setCurrentText(rule.get('type', 'request'))
+        self.rule_form_group.setTitle("Editar Regra de Interceptação")
+        self.save_rule_button.setText("Salvar Alterações")
+        self.cancel_edit_button.show()
+        self.host_entry.setFocus()
+
+    def cancel_edit(self):
+        self._editing_rule_index = None
+        self.rule_form_group.setTitle("Adicionar Regra de Interceptação")
+        self.save_rule_button.setText("Adicionar Regra")
+        self.cancel_edit_button.hide()
 
     def remove_rule(self):
         selected_indexes = self.rules_table.selectionModel().selectedRows()
