@@ -2,6 +2,7 @@ import json
 import os
 import queue
 import threading
+import uuid
 from urllib.parse import urlparse
 import fnmatch
 
@@ -60,8 +61,8 @@ class InterceptConfig:
         self.paused = False
         self.intercept_enabled = False
         self.intercept_queue = queue.Queue()
-        self.intercept_response_queue = queue.Queue()
-        self.intercept_lock = threading.Lock()
+        self.intercept_waiters = {}
+        self.intercept_lock = threading.RLock()
         self.ui_queue = None  # Fila para notificar a UI
         self.passive_scan_enabled = True
         
@@ -244,6 +245,8 @@ class InterceptConfig:
     def toggle_intercept(self):
         """Alterna o estado de interceptação manual."""
         self.intercept_enabled = not self.intercept_enabled
+        if not self.intercept_enabled:
+            self.release_pending_intercepts()
         return self.intercept_enabled
 
     def is_intercept_enabled(self):
@@ -252,11 +255,16 @@ class InterceptConfig:
 
     def add_to_intercept_queue(self, flow_data):
         """Adiciona uma requisição à fila de interceptação e notifica a UI."""
+        intercept_id = uuid.uuid4().hex
+        with self.intercept_lock:
+            self.intercept_waiters[intercept_id] = queue.Queue(maxsize=1)
+        flow_data['intercept_id'] = intercept_id
         self.intercept_queue.put(flow_data)
         if self.ui_queue:
             # Envia uma cópia dos dados necessários para a UI, sem o objeto 'flow'
             ui_data = {k: v for k, v in flow_data.items() if k != 'flow'}
             self.ui_queue.put({"type": "intercepted_request", "data": ui_data})
+        return intercept_id
 
     def get_from_intercept_queue(self, timeout=0.1):
         """Obtém uma requisição da fila de interceptação."""
@@ -267,26 +275,50 @@ class InterceptConfig:
             return None
 
     def add_intercept_response(self, response_data):
-        """Adiciona uma resposta à fila de respostas."""
-        self.intercept_response_queue.put(response_data)
-
-    def get_intercept_response(self, timeout=10):
-        """Obtém uma resposta da fila de respostas."""
+        """Entrega uma decisão à requisição manualmente interceptada."""
+        intercept_id = response_data.get('intercept_id')
+        if not intercept_id:
+            return False
+        with self.intercept_lock:
+            response_queue = self.intercept_waiters.get(intercept_id)
+        if response_queue is None:
+            return False
         try:
-            return self.intercept_response_queue.get(timeout=timeout)
+            response_queue.put_nowait(response_data)
+            return True
+        except queue.Full:
+            return False
+
+    def get_intercept_response(self, intercept_id, timeout=10):
+        """Aguarda a decisão associada exclusivamente à requisição informada."""
+        with self.intercept_lock:
+            response_queue = self.intercept_waiters.get(intercept_id)
+        if response_queue is None:
+            return None
+        try:
+            return response_queue.get(timeout=timeout)
         except queue.Empty:
             return None
+        finally:
+            with self.intercept_lock:
+                self.intercept_waiters.pop(intercept_id, None)
+
+    def release_pending_intercepts(self):
+        """Libera requisições paradas quando o Intercept é desligado."""
+        with self.intercept_lock:
+            pending_queues = list(self.intercept_waiters.values())
+        for response_queue in pending_queues:
+            try:
+                response_queue.put_nowait({'action': 'forward'})
+            except queue.Full:
+                continue
 
     def clear_intercept_queues(self):
         """Limpa todas as filas de interceptação."""
+        self.release_pending_intercepts()
         while not self.intercept_queue.empty():
             try:
                 self.intercept_queue.get_nowait()
-            except queue.Empty:
-                break
-        while not self.intercept_response_queue.empty():
-            try:
-                self.intercept_response_queue.get_nowait()
             except queue.Empty:
                 break
 

@@ -11,6 +11,9 @@ class InterceptTab(QWidget):
 
     def __init__(self):
         super().__init__()
+        self._intercept_id = None
+        self._original_headers_text = ''
+        self._original_body_text = ''
 
         layout = QVBoxLayout(self)
 
@@ -106,12 +109,17 @@ class InterceptTab(QWidget):
 
     def display_request(self, request_data: dict):
         """Preenche a UI com os dados de uma requisição interceptada."""
+        self._intercept_id = request_data.get('intercept_id')
         self.method_label.setText(request_data.get('method', '-'))
         self.url_label.setText(request_data.get('url', '-'))
 
         headers = "\n".join(f"{k}: {v}" for k, v in request_data.get('headers', {}).items())
         self.headers_text.setPlainText(headers)
         self.body_text.setPlainText(request_data.get('body', ''))
+        # QTextEdit normaliza quebras de linha. Compara o valor normalizado para
+        # que um Forward sem edição preserve o corpo original no mitmproxy.
+        self._original_headers_text = self.headers_text.toPlainText()
+        self._original_body_text = self.body_text.toPlainText()
 
         self.forward_button.setEnabled(True)
         self.drop_button.setEnabled(True)
@@ -121,16 +129,20 @@ class InterceptTab(QWidget):
         headers_text = self.headers_text.toPlainText().strip()
         body_text = self.body_text.toPlainText() # Não usa strip para não remover espaços intencionais
 
-        modified_headers = {}
-        for line in headers_text.split('\n'):
-            if ':' in line:
-                key, value = line.split(':', 1)
-                modified_headers[key.strip()] = value.strip()
+        modified_data = {'intercept_id': self._intercept_id}
+        if headers_text != self._original_headers_text:
+            modified_headers = {}
+            for line in headers_text.split('\n'):
+                if ':' in line:
+                    key, value = line.split(':', 1)
+                    modified_headers[key.strip()] = value.strip()
+            modified_data['modified_headers'] = modified_headers
+        if body_text != self._original_body_text:
+            modified_data['modified_body'] = body_text
+        return modified_data
 
-        return {
-            'modified_headers': modified_headers,
-            'modified_body': body_text
-        }
+    def get_intercept_id(self):
+        return self._intercept_id
 
     def reset_ui(self):
         """Limpa os campos e desabilita os botões de ação."""
@@ -138,5 +150,8 @@ class InterceptTab(QWidget):
         self.url_label.setText("-")
         self.headers_text.clear()
         self.body_text.clear()
+        self._intercept_id = None
+        self._original_headers_text = ''
+        self._original_body_text = ''
         self.forward_button.setEnabled(False)
         self.drop_button.setEnabled(False)

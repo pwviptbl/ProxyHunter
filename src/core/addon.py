@@ -135,11 +135,11 @@ class InterceptAddon:
             }
             
             # Adiciona à fila de interceptação
-            self.config.add_to_intercept_queue(flow_data)
+            intercept_id = self.config.add_to_intercept_queue(flow_data)
             log.info(f"Requisição interceptada: {flow.request.method} {flow.request.pretty_url}")
             
             # Aguarda decisão do usuário (Forward ou Drop)
-            response = self.config.get_intercept_response(timeout=300)  # 5 minutos de timeout
+            response = self.config.get_intercept_response(intercept_id, timeout=300)  # 5 minutos de timeout
             
             if response is None:
                 # Timeout - cancela a requisição

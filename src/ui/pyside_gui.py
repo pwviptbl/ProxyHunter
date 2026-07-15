@@ -502,7 +502,10 @@ class ProxyGUI(QMainWindow):
 
     def drop_request(self):
         """Cancela a requisição interceptada."""
-        response_data = {'action': 'drop'}
+        response_data = {
+            'action': 'drop',
+            'intercept_id': self.intercept_tab.get_intercept_id(),
+        }
         self.config.add_intercept_response(response_data)
         self.intercept_tab.reset_ui()
         log.info("Requisição interceptada cancelada (drop).")
