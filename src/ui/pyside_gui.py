@@ -41,6 +41,7 @@ from src.ui.tabs.campaign_tab import CampaignTab
 from src.ui.tabs.spider_tab import SpiderTab
 from src.ui.tabs.websocket_tab import WebSocketTab
 from src.ui.tabs.technologies_tab import TechnologiesTab
+from src.ui.tabs.browser_automation_tab import BrowserAutomationTab
 
 from src.ui.dialogs.ai_config_dialog import AIConfigDialog
 from src.ui.dialogs.generate_report_dialog import GenerateReportDialog
@@ -249,6 +250,10 @@ class ProxyGUI(QMainWindow):
         # Cria e adiciona a aba de campanhas
         self.campaign_tab = CampaignTab(self.history, self.active_scanner)
         add_tab(self.campaign_tab, "Campanhas")
+
+        # Cria e adiciona a aba de automacao de cadastro
+        self.browser_automation_tab = BrowserAutomationTab(self.browser_manager)
+        add_tab(self.browser_automation_tab, "Automacao")
         
         # Cria e adiciona a aba do Spider/Crawler
         self.spider_tab = SpiderTab(self.spider, self.config)
@@ -445,6 +450,21 @@ class ProxyGUI(QMainWindow):
         """Recebe o sinal e atualiza a UI na thread principal."""
         msg_type = message.get("type")
         data = message.get("data")
+        if (
+            isinstance(msg_type, str)
+            and (
+                msg_type.startswith("automation_")
+                or msg_type in (
+                    "browser_launch_ready",
+                    "browser_launch_error",
+                    "browser_closed",
+                    "browser_navigation_ready",
+                    "browser_navigation_error",
+                )
+            )
+            and hasattr(self, 'browser_automation_tab')
+        ):
+            self.browser_automation_tab.handle_ui_update(message)
 
         if msg_type == "new_history_entry":
             # Adiciona ao histórico thread-safely na thread principal

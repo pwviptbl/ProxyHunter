@@ -50,6 +50,11 @@ Aplicação com interface gráfica (PySide6) organizada em abas, e uma CLI para 
 - Descoberta automática de URLs/endpoints, formulários/campos e parâmetros.
 - Integração com histórico e exportação (rotas/sitemap).
 
+### Automação de cadastro
+
+- Aba de automação para preencher um input em lote com valores de um arquivo e clicar em um botão real no browser.
+- Os seletores aceitam CSS completo, incluindo `#id`, `.class` e expressões como `input[name='nome']` ou `.btn-cadastrar`.
+
 ### WebSocket
 
 - Monitoramento e histórico de conexões e mensagens (texto e binário).

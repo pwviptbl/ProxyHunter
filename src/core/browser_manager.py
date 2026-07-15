@@ -4,7 +4,7 @@ import subprocess
 import sys
 import traceback
 from playwright.async_api import async_playwright, Playwright, Browser, Page
-from threading import Lock, Thread
+from threading import Lock, Thread, Event
 import ctypes
 import platform
 from PySide6.QtCore import QThread
@@ -31,6 +31,8 @@ class BrowserManager:
         self.browser_thread = None
         self._lock = Lock()
         self._launching = False
+        self._automation_stop = Event()
+        self.automation_future = None
 
     def _get_screen_dimensions(self):
         """Obtém a largura e altura da tela principal."""
@@ -220,8 +222,248 @@ class BrowserManager:
         thread.start()
         return True
 
+    def is_ready(self) -> bool:
+        return bool(self.browser and self.page and self.playwright_loop and self.playwright_loop.is_running())
+
+    def start_bulk_fill(
+        self,
+        target_url: str,
+        values: list[str],
+        input_selector: str,
+        submit_selector: str,
+        *,
+        use_current_page: bool = False,
+        timeout: int = 10,
+        delay: float = 0.5,
+    ):
+        """Agenda uma automação de preenchimento no browser já aberto."""
+        if not self.is_ready():
+            return None, "browser_not_ready"
+        if not target_url or not values or not input_selector or not submit_selector:
+            return None, "invalid_arguments"
+
+        with self._lock:
+            if self.automation_future and not self.automation_future.done():
+                return None, "automation_running"
+            self._automation_stop.clear()
+            future = asyncio.run_coroutine_threadsafe(
+                self._bulk_fill_async(
+                    target_url=target_url,
+                    values=values,
+                    input_selector=input_selector,
+                    submit_selector=submit_selector,
+                    use_current_page=use_current_page,
+                    timeout=timeout,
+                    delay=delay,
+                ),
+                self.playwright_loop,
+            )
+            self.automation_future = future
+            future.add_done_callback(self._clear_automation_future)
+            return future, None
+
+    def stop_bulk_fill(self):
+        """Solicita interrupção da automação atual."""
+        self._automation_stop.set()
+        future = self.automation_future
+        if future and not future.done():
+            future.cancel()
+
+    def goto_url(self, target_url: str, *, timeout: int = 15):
+        """Agenda uma navegacao unica no browser atual."""
+        if not self.is_ready():
+            return None, "browser_not_ready"
+        if not target_url:
+            return None, "invalid_arguments"
+
+        with self._lock:
+            future = asyncio.run_coroutine_threadsafe(
+                self._goto_url_async(target_url=target_url, timeout=timeout),
+                self.playwright_loop,
+            )
+            return future, None
+
+    async def _goto_url_async(self, target_url: str, *, timeout: int = 15):
+        if not self.page:
+            self._notify_ui("automation_error", "Browser nao esta pronto.")
+            return
+        if not target_url.startswith(("http://", "https://")):
+            target_url = f"http://{target_url.lstrip('/')}"
+        try:
+            await self.page.goto(target_url, wait_until="domcontentloaded", timeout=max(1, int(timeout)) * 1000)
+            self._notify_ui("browser_navigation_ready", {"url": self.page.url})
+        except Exception as exc:
+            self._notify_ui("browser_navigation_error", str(exc))
+
+    def _clear_automation_future(self, _future=None):
+        with self._lock:
+            self.automation_future = None
+
+    async def _bulk_fill_async(
+        self,
+        target_url: str,
+        values: list[str],
+        input_selector: str,
+        submit_selector: str,
+        *,
+        use_current_page: bool = False,
+        timeout: int = 10,
+        delay: float = 0.5,
+    ):
+        """Executa o ciclo de preenchimento com Playwright no loop do browser."""
+        if not self.page:
+            self._notify_ui("automation_error", "Browser nao esta pronto.")
+            return
+        if not use_current_page:
+            if not target_url.startswith(("http://", "https://")):
+                target_url = f"http://{target_url.lstrip('/')}"
+
+        total = len(values)
+        success = 0
+        failed = 0
+        timeout_ms = max(1, int(timeout)) * 1000
+        delay_ms = max(0, int(delay * 1000))
+
+        self._notify_ui(
+            "automation_started",
+            {
+                "target_url": target_url,
+                "total": total,
+                "input_selector": input_selector,
+                "submit_selector": submit_selector,
+            },
+        )
+
+        try:
+            for index, raw_value in enumerate(values, start=1):
+                if self._automation_stop.is_set():
+                    break
+
+                value = str(raw_value).strip()
+                if not value:
+                    failed += 1
+                    self._notify_ui(
+                        "automation_log",
+                        {"level": "warning", "message": f"[{index}/{total}] valor vazio ignorado."},
+                    )
+                    continue
+
+                try:
+                    if not use_current_page:
+                        await self.page.goto(target_url, wait_until="domcontentloaded", timeout=timeout_ms)
+                    resolved_input = await self._resolve_visible_selector(
+                        input_selector,
+                        timeout_ms=timeout_ms,
+                        kind="input",
+                    )
+                    resolved_submit = await self._resolve_visible_selector(
+                        submit_selector,
+                        timeout_ms=timeout_ms,
+                        kind="button",
+                    )
+                    if resolved_input != input_selector:
+                        self._notify_ui(
+                            "automation_log",
+                            {
+                                "level": "warning",
+                                "message": f"Seletor do input ajustado para: {resolved_input}",
+                            },
+                        )
+                    if resolved_submit != submit_selector:
+                        self._notify_ui(
+                            "automation_log",
+                            {
+                                "level": "warning",
+                                "message": f"Seletor do botao ajustado para: {resolved_submit}",
+                            },
+                        )
+                    await self.page.fill(resolved_input, value)
+                    await self.page.click(resolved_submit)
+                    try:
+                        await self.page.wait_for_load_state("networkidle", timeout=timeout_ms)
+                    except Exception:
+                        pass
+                    success += 1
+                    self._notify_ui(
+                        "automation_log",
+                        {
+                            "level": "info",
+                            "message": f"[{index}/{total}] enviado: {value}",
+                            "url": self.page.url,
+                        },
+                    )
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:
+                    failed += 1
+                    self._notify_ui(
+                        "automation_log",
+                        {
+                            "level": "error",
+                            "message": f"[{index}/{total}] falha para '{value}': {exc}",
+                        },
+                    )
+
+                if self._automation_stop.is_set():
+                    break
+                if delay_ms:
+                    await self.page.wait_for_timeout(delay_ms)
+        except asyncio.CancelledError:
+            self._notify_ui(
+                "automation_stopped",
+                {"success": success, "failed": failed, "total": total},
+            )
+            raise
+
+        summary = {
+            "success": success,
+            "failed": failed,
+            "total": total,
+        }
+        if self._automation_stop.is_set():
+            self._notify_ui("automation_stopped", summary)
+        else:
+            self._notify_ui("automation_finished", summary)
+
+    async def _resolve_visible_selector(self, selector: str, *, timeout_ms: int, kind: str) -> str:
+        selectors = self._selector_candidates(selector, kind=kind)
+        last_error = None
+        for candidate in selectors:
+            try:
+                await self.page.wait_for_selector(candidate, state="visible", timeout=timeout_ms)
+                return candidate
+            except Exception as exc:
+                last_error = exc
+        if last_error:
+            raise last_error
+        raise RuntimeError(f"Seletor nao informado para {kind}.")
+
+    @staticmethod
+    def _selector_candidates(selector: str, *, kind: str) -> list[str]:
+        raw = (selector or "").strip()
+        candidates = []
+
+        def add(value: str):
+            value = (value or "").strip()
+            if value and value not in candidates:
+                candidates.append(value)
+
+        if ".p-filled" in raw:
+            add(raw.replace(".p-filled", ""))
+        add(raw)
+        if kind == "input" and ".p-inputtext" in raw:
+            add(".p-inputtext")
+            add("input.p-inputtext")
+            add("input[class*='p-inputtext']")
+        if kind == "button" and ".p-button" in raw:
+            add(".p-button")
+            add("button.p-button")
+            add("button[class*='p-button']")
+        return candidates
+
     def close_browser_sync(self, *args):
         """Fecha o navegador a partir de um contexto síncrono."""
+        self.stop_bulk_fill()
         if self.playwright or self.playwright_loop:
             # Usa o loop da thread do Playwright, se disponível
             loop = self.playwright_loop

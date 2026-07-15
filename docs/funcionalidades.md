@@ -11,6 +11,7 @@
 - Cookie (Cookie Jar)
 - Scanner
 - Spider
+- Automacao
 - WebSocket
 - Tecnologias
 
@@ -27,5 +28,6 @@
 - **Cookie (Cookie Jar):** Captura e gerenciamento de cookies, com sessão forçada para Repetição/Attacker.
 - **Scanner:** Scan passivo no tráfego e scan ativo sob demanda com módulos configuráveis.
 - **Spider:** Descoberta automática de URLs/endpoints e formulários.
+- **Automacao:** Cadastro em lote no browser real usando URL, arquivo de valores e seletores CSS para input/botao.
 - **WebSocket:** Monitoramento e histórico de conexões e mensagens WebSocket (reenvio não implementado no momento).
 - **Tecnologias:** Detecção e exibição de tecnologias usadas pelos alvos.
